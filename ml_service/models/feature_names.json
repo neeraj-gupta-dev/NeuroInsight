@@ -1,0 +1,26 @@
+{
+  "features": [
+    "delta_mean",
+    "delta_std",
+    "theta_mean",
+    "theta_std",
+    "alpha_mean",
+    "alpha_std",
+    "beta_mean",
+    "beta_std",
+    "gamma_mean",
+    "gamma_std",
+    "theta_alpha_ratio",
+    "beta_alpha_ratio"
+  ],
+  "classes": [
+    "Distracted",
+    "Drowsy",
+    "Focused",
+    "Relaxed",
+    "Stressed"
+  ],
+  "n_features": 12,
+  "test_accuracy": 0.5333,
+  "cv_accuracy": 0.4711
+}

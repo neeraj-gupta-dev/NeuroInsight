@@ -1,0 +1,267 @@
+/* ── Google Fonts ─────────────────────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+
+/* Tailwind */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+
+/* ── CSS Variables ────────────────────────────────────────────────────────── */
+:root {
+  --bg-primary: #020817;
+  --bg-secondary: #050B18;
+  --bg-card: rgba(10, 22, 40, 0.85);
+  --border-glow: rgba(0, 212, 255, 0.25);
+  --cyan: #00D4FF;
+  --emerald: #00FF88;
+  --violet: #7B2FBE;
+  --amber: #FFD700;
+  --rose: #FF3366;
+  --orange: #FF6B35;
+  --text-primary: #E8F4FF;
+  --text-muted: #6B8BAE;
+}
+
+/* ── Base ─────────────────────────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', system-ui, sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* Animated background grid */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(0, 212, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 212, 255, 0.03) 1px, transparent 1px);
+  background-size: 50px 50px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+#root {
+  position: relative;
+  z-index: 1;
+}
+
+/* ── Glassmorphism card ───────────────────────────────────────────────────── */
+.glass-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-glow);
+  border-radius: 16px;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  transition: border-color 0.3s, box-shadow 0.3s;
+}
+
+.glass-card:hover {
+  border-color: rgba(0, 212, 255, 0.5);
+  box-shadow: 0 0 30px rgba(0, 212, 255, 0.08);
+}
+
+/* ── Neon text ────────────────────────────────────────────────────────────── */
+.text-neon-cyan {
+  color: var(--cyan);
+  text-shadow: 0 0 15px rgba(0, 212, 255, 0.6);
+}
+
+.text-neon-green {
+  color: var(--emerald);
+  text-shadow: 0 0 15px rgba(0, 255, 136, 0.6);
+}
+
+.text-neon-violet {
+  color: var(--violet);
+  text-shadow: 0 0 15px rgba(123, 47, 190, 0.6);
+}
+
+/* ── Glow borders ─────────────────────────────────────────────────────────── */
+.border-glow-cyan {
+  border-color: rgba(0, 212, 255, 0.5) !important;
+  box-shadow: 0 0 20px rgba(0, 212, 255, 0.15) !important;
+}
+
+.border-glow-green {
+  border-color: rgba(0, 255, 136, 0.5) !important;
+  box-shadow: 0 0 20px rgba(0, 255, 136, 0.15) !important;
+}
+
+.border-glow-orange {
+  border-color: rgba(255, 107, 53, 0.5) !important;
+  box-shadow: 0 0 20px rgba(255, 107, 53, 0.15) !important;
+}
+
+.border-glow-amber {
+  border-color: rgba(255, 215, 0, 0.5) !important;
+  box-shadow: 0 0 20px rgba(255, 215, 0, 0.15) !important;
+}
+
+.border-glow-violet {
+  border-color: rgba(123, 47, 190, 0.5) !important;
+  box-shadow: 0 0 20px rgba(123, 47, 190, 0.15) !important;
+}
+
+/* ── Buttons ──────────────────────────────────────────────────────────────── */
+.btn-primary {
+  background: linear-gradient(135deg, #00D4FF, #0099CC);
+  color: #020817;
+  font-weight: 700;
+  border: none;
+  border-radius: 10px;
+  padding: 0.65rem 1.5rem;
+  cursor: pointer;
+  transition: all 0.25s;
+  font-size: 0.9rem;
+  letter-spacing: 0.02em;
+}
+
+.btn-primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(0, 212, 255, 0.35);
+}
+
+.btn-primary:active {
+  transform: translateY(0);
+}
+
+.btn-danger {
+  background: linear-gradient(135deg, #FF3366, #CC2952);
+  color: #fff;
+  font-weight: 700;
+  border: none;
+  border-radius: 10px;
+  padding: 0.65rem 1.5rem;
+  cursor: pointer;
+  transition: all 0.25s;
+}
+
+.btn-danger:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(255, 51, 102, 0.35);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid rgba(107, 139, 174, 0.3);
+  border-radius: 10px;
+  padding: 0.65rem 1.5rem;
+  cursor: pointer;
+  transition: all 0.25s;
+}
+
+.btn-ghost:hover {
+  color: var(--text-primary);
+  border-color: rgba(0, 212, 255, 0.4);
+}
+
+/* ── Input fields ─────────────────────────────────────────────────────────── */
+.input-neural {
+  width: 100%;
+  background: rgba(5, 11, 24, 0.8);
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  border-radius: 10px;
+  color: var(--text-primary);
+  padding: 0.75rem 1rem;
+  font-size: 0.9rem;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.input-neural::placeholder {
+  color: var(--text-muted);
+}
+
+.input-neural:focus {
+  border-color: var(--cyan);
+  box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.1);
+}
+
+/* ── Scrollbar ────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-primary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 212, 255, 0.3);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 212, 255, 0.5);
+}
+
+/* ── Status badge ─────────────────────────────────────────────────────────── */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: 99px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+/* ── Pulse dot ────────────────────────────────────────────────────────────── */
+.pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  animation: pulse-ring 1.5s ease-out infinite;
+}
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+
+  70% {
+    transform: scale(1.5);
+    opacity: 0.5;
+  }
+
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* ── Recharts overrides ───────────────────────────────────────────────────── */
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line {
+  stroke: rgba(0, 212, 255, 0.07);
+}
+
+.recharts-text {
+  fill: #6B8BAE;
+}
+
+.recharts-tooltip-wrapper .recharts-default-tooltip {
+  background: rgba(5, 11, 24, 0.95) !important;
+  border: 1px solid rgba(0, 212, 255, 0.3) !important;
+  border-radius: 8px !important;
+}
