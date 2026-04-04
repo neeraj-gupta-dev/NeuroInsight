@@ -1,6 +1,6 @@
 .venv/
 __pycache__/
-*.pkl
-*.npy
-*.npz
+# *.pkl
+# *.npy
+# *.npz
 dataset/
