@@ -39,8 +39,8 @@ export default function Dashboard() {
     }
   }, [restoreSession]);
 
-  // Cleanup on unmount
-  useEffect(() => () => stopStream(), [stopStream]);
+  // NOTE: Do NOT call stopStream() on unmount.
+  // The stream is managed by EEGStreamContext and persists across navigation.
 
   // Handle start simulation (clears restoration state)
   const handleStart = () => {

@@ -1,6 +1,7 @@
 // frontend/src/App.jsx
 import { Routes, Route, Navigate } from "react-router-dom";
-import { AuthProvider, useAuth } from "./context/AuthContext";
+import { AuthProvider, useAuth }    from "./context/AuthContext";
+import { EEGStreamProvider }        from "./context/EEGStreamContext";
 import Login     from "./pages/Login";
 import Register  from "./pages/Register";
 import Dashboard from "./pages/Dashboard";
@@ -25,14 +26,16 @@ function GuestRoute({ children }) {
 export default function App() {
   return (
     <AuthProvider>
-      <Routes>
-        <Route path="/"          element={<Navigate to="/dashboard" replace />} />
-        <Route path="/login"     element={<GuestRoute><Login /></GuestRoute>} />
-        <Route path="/register"  element={<GuestRoute><Register /></GuestRoute>} />
-        <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-        <Route path="/history"   element={<ProtectedRoute><History /></ProtectedRoute>} />
-        <Route path="*"          element={<Navigate to="/dashboard" replace />} />
-      </Routes>
+      <EEGStreamProvider>
+        <Routes>
+          <Route path="/"          element={<Navigate to="/dashboard" replace />} />
+          <Route path="/login"     element={<GuestRoute><Login /></GuestRoute>} />
+          <Route path="/register"  element={<GuestRoute><Register /></GuestRoute>} />
+          <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+          <Route path="/history"   element={<ProtectedRoute><History /></ProtectedRoute>} />
+          <Route path="*"          element={<Navigate to="/dashboard" replace />} />
+        </Routes>
+      </EEGStreamProvider>
     </AuthProvider>
   );
 }
