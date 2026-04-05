@@ -13,42 +13,58 @@ const ML_URL  = () => process.env.ML_SERVICE_URL || "http://localhost:8000";
 
 // ── GET /api/eeg/stream ───────────────────────────────────────────────────
 router.get("/stream", protect, async (req, res) => {
-  // SSE headers
+  // 1. Set SSE headers for production proxying
   res.setHeader("Content-Type",       "text/event-stream");
-  res.setHeader("Cache-Control",      "no-cache");
+  res.setHeader("Cache-Control",      "no-cache, no-transform");
   res.setHeader("Connection",         "keep-alive");
   res.setHeader("X-Accel-Buffering",  "no");
   res.flushHeaders();
 
-  let upstream;
+  // 2. Heartbeat to keep Render/Heroku connection alive
+  const heartbeat = setInterval(() => {
+    res.write(":\n\n"); // SSE comment as ping
+  }, 15000);
+
+  // 3. Setup AbortController for upstream cleanup
+  const controller = new AbortController();
+  
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    controller.abort();
+    res.end();
+  });
+
   try {
     const { default: fetch } = await import("node-fetch");
-    upstream = await fetch(`${ML_URL()}/stream-eeg`);
+    const upstream = await fetch(`${ML_URL()}/stream-eeg`, {
+      signal: controller.signal,
+      headers: { Accept: "text/event-stream" }
+    });
+
+    if (!upstream.ok) {
+      throw new Error(`Upstream returned ${upstream.status}`);
+    }
+
+    // 4. Pipe stream manually from FastAPI to Client
+    const reader = upstream.body.getReader();
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      // value is a Uint8Array, pass directly to res.write
+      res.write(value);
+    }
+
   } catch (err) {
-    console.error("[eeg/stream] Cannot reach ML service:", err.message);
-    res.write(`data: ${JSON.stringify({ error: "ML service unavailable" })}\n\n`);
-    return res.end();
-  }
-
-  const reader  = upstream.body;
-  const onData  = (chunk) => res.write(chunk);
-  const onEnd   = ()      => res.end();
-  const onError = (err)   => {
-    console.error("[eeg/stream] Upstream error:", err.message);
+    if (err.name !== "AbortError") {
+      console.error("[eeg/stream] SSE Proxy Error:", err.message);
+      res.write(`data: ${JSON.stringify({ error: "ML service unavailable" })}\n\n`);
+    }
+  } finally {
+    clearInterval(heartbeat);
     res.end();
-  };
-
-  reader.on("data",  onData);
-  reader.on("end",   onEnd);
-  reader.on("error", onError);
-
-  // Clean up when client disconnects
-  req.on("close", () => {
-    reader.removeListener("data",  onData);
-    reader.removeListener("end",   onEnd);
-    reader.removeListener("error", onError);
-    reader.destroy();
-  });
+  }
 });
 
 // ── POST /api/eeg/predict ─────────────────────────────────────────────────
