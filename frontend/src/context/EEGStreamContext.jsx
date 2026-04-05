@@ -7,11 +7,11 @@ import {
   createContext, useContext, useRef,
   useState, useCallback, useEffect,
 } from "react";
-import API from "../api/axios";
 
 const EEGStreamContext = createContext(null);
 
-const SSE_URL         = "/api/eeg/stream";
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
+const SSE_PATH         = "/api/eeg/stream";
 const MAX_CHART_POINTS = 60;
 const RECONNECT_DELAY  = 1500; // ms to wait before reconnecting
 
@@ -128,11 +128,16 @@ export function EEGStreamProvider({ children }) {
     setHasReceivedFirstPacket(false);
 
     const token = localStorage.getItem("ni_token");
-    const streamUrl = `${SSE_URL}?token=${token}`;
+    const streamUrl = `${API_BASE_URL}${SSE_PATH}?token=${token}`;
+    console.log("[SSE] Connecting to:", streamUrl);
     
     // 1. Create EventSource correctly
     const es = new EventSource(streamUrl, { withCredentials: true });
     esRef.current = es;
+
+    es.onopen = () => {
+      console.log("[SSE] Connection opened successfully");
+    };
 
     // 2. Handle connection handshake
     es.addEventListener("connected", () => {

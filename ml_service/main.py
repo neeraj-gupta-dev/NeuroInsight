@@ -1,8 +1,5 @@
 """
-FastAPI ML Service — NeuroInsight 2.0
-
-Startup:
-    uvicorn main:app --reload --port 8000
+FastAPI ML Service — NeuroInsight 2.2
 """
 
 import os
@@ -15,7 +12,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from routers import stream, predict
+from routers.stream import router as stream_router
+from routers import predict
 from services.predictor import predictor
 from services.eeg_streamer import streamer
 
@@ -45,21 +43,17 @@ app = FastAPI(
 )
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
-_origins_raw = os.getenv(
-    "ALLOWED_ORIGINS", "http://localhost:5000,http://localhost:5173"
-)
-origins = [o.strip() for o in _origins_raw.split(",")]
-
+# Explicitly allowing all origins for the symposium demo to ensure no connection issues
 app.add_middleware(
     CORSMiddleware,
-    allow_origins     = origins,
+    allow_origins     = ["*"],
     allow_credentials = True,
     allow_methods     = ["*"],
     allow_headers     = ["*"],
 )
 
 # ── Routers ───────────────────────────────────────────────────────────────────
-app.include_router(stream.router,  tags=["Streaming"])
+app.include_router(stream_router, prefix="/api/eeg", tags=["EEG Stream"])
 app.include_router(predict.router, tags=["Prediction"])
 
 

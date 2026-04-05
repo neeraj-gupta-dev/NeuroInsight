@@ -7,7 +7,7 @@ from services.eeg_streamer import streamer
 router = APIRouter()
 
 
-@router.get("/stream-eeg")
+@router.get("/stream")
 async def stream_eeg():
     """
     True SSE streaming endpoint using sse-starlette.
