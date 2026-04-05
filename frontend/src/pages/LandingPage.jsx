@@ -55,8 +55,14 @@ export default function LandingPage() {
               <Link to="/login" className="w-full sm:w-auto px-10 py-5 rounded-2xl bg-cyan-500 text-slate-900 font-black text-lg hover:bg-cyan-400 hover:scale-105 transition-all shadow-2xl shadow-cyan-500/30">
                 Launch System
               </Link>
-              <a href="#" className="w-full sm:w-auto px-10 py-5 rounded-2xl bg-white/5 border border-white/10 text-white font-bold text-lg hover:bg-white/10 transition-all">
+              <a 
+                href="https://github.com/neeraj-gupta-dev/NeuroInsight" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="w-full sm:w-auto px-10 py-5 rounded-2xl bg-white/5 border border-white/10 text-white font-bold text-lg hover:bg-white/10 transition-all flex items-center justify-center gap-2"
+              >
                 View on GitHub
+                <span>↗</span>
               </a>
             </div>
           </motion.div>

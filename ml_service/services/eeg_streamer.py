@@ -7,6 +7,8 @@ import os
 import json
 import logging
 import asyncio
+import time
+import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -54,13 +56,17 @@ class EEGStreamer:
             return
 
         from services.predictor import predictor
-        import time
+
+        # 1. Send immediate handshake
+        yield "event: connected\ndata: ok\n\n"
+        print("[STREAM] Client connected — handshake sent")
 
         idx = 0
         total = len(self.df)
 
         while True:
             row = self.df.iloc[idx % total]
+            epoch_id = int(self.df.index[idx % total])
             features = {f: float(row[f]) for f in self.feature_names}
             
             # --- Cognitive Metric Calculation (Normalized 0-100) ---
@@ -86,7 +92,7 @@ class EEGStreamer:
 
             # Response Payload (Flattened for SSE spec)
             payload = {
-                "epoch_id":  int(self.df.index[idx % total]),
+                "epoch_id":  epoch_id,
                 "timestamp": int(time.time() * 1000),
                 "subject":   int(row["subject"]),
                 "bands":     {k.replace("_mean", ""): round(v, 4) for k, v in features.items() if "_mean" in k},
@@ -101,9 +107,10 @@ class EEGStreamer:
                     logger.error(f"Prediction error: {exc}")
 
             yield f"event: eeg\ndata: {json.dumps(payload)}\n\n"
+            print(f"[STREAM] Sending EEG packet {epoch_id}")
 
             idx += 1
-            await asyncio.sleep(delay_ms / 1000.0)
+            await asyncio.sleep(0.4) # Fixed 400ms delay per requirements
 
     @property
     def is_ready(self) -> bool:
