@@ -1,22 +1,25 @@
 import asyncio
 import json
 import random
+import time
 
 async def stream():
     print("[STREAM] EEG streamer started")
 
-    # handshake event
-    yield {
-        "event": "connected",
-        "data": "ok"
-    }
-
-    await asyncio.sleep(1)
+    # handshake
+    yield {"event": "connected", "data": "ok"}
 
     idx = 0
+    last_heartbeat = time.time()
 
     while True:
         try:
+            # heartbeat every 15s (keeps Render proxy alive)
+            if time.time() - last_heartbeat > 15:
+                yield {"event": "heartbeat", "data": "keep-alive"}
+                print("[STREAM] Heartbeat sent")
+                last_heartbeat = time.time()
+
             packet = {
                 "attention": round(random.uniform(40, 90), 2),
                 "stress": round(random.uniform(10, 60), 2),
