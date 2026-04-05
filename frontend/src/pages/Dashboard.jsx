@@ -19,7 +19,7 @@ const STATUS_CONFIG = {
 export default function Dashboard() {
   const {
     streaming, eegBuffer, prediction, metrics,
-    error, status, connectionStatus,
+    error, status, connectionStatus, hasReceivedFirstPacket,
     startStream, stopStream, clearHistory,
     restoreSession,
   } = useEEGStream();
@@ -41,7 +41,6 @@ export default function Dashboard() {
   const handleClear = () => { setIsRestored(false); clearHistory(); };
 
   const sc = STATUS_CONFIG[status] || STATUS_CONFIG.idle;
-  const hasData = eegBuffer.length > 0;
 
   return (
     <div className="min-h-screen pb-12" style={{ paddingTop: 64 }}>
@@ -111,7 +110,7 @@ export default function Dashboard() {
         <div className="relative">
           {/* Waiting Overlay */}
           <AnimatePresence>
-            {streaming && !hasData && (
+            {streaming && !hasReceivedFirstPacket && (
               <motion.div 
                 className="absolute inset-0 z-50 rounded-3xl backdrop-blur-md flex flex-col items-center justify-center border border-white/5"
                 initial={{ opacity: 0 }}

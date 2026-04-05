@@ -27,6 +27,7 @@ export function EEGStreamProvider({ children }) {
   const [metrics,      setMetrics]     = useState({
     attention: 0, relaxation: 0, stress: 0, engagement: 0
   });
+  const [hasReceivedFirstPacket, setHasReceivedFirstPacket] = useState(false);
 
   const [prediction,   setPrediction]  = useState(null);
   const [sessions,     setSessions]    = useState(() => {
@@ -39,9 +40,7 @@ export function EEGStreamProvider({ children }) {
   const [error,        setError]       = useState(null);
 
   // ── Internal refs (never trigger re-renders) ────────────────────────────
-  const abortRef       = useRef(null);
-  const readerRef      = useRef(null);
-  const bufferRef      = useRef("");
+  const esRef          = useRef(null);
   const intentRef      = useRef(false);
   const reconnTimerRef = useRef(null);
   const saveCounterRef = useRef(0);
@@ -51,29 +50,7 @@ export function EEGStreamProvider({ children }) {
   const lastSnapshotT  = useRef(0);  // Last time a snapshot was taken
   const streamStartT   = useRef(0);
 
-  // ── SSE chunk parser ────────────────────────────────────────────────────
-  const parseSSEChunk = useCallback((raw) => {
-    bufferRef.current += raw;
-    const blocks = bufferRef.current.split("\n\n");
-    bufferRef.current = blocks.pop();
-
-    const parsed = [];
-    for (const block of blocks) {
-      const trimmed = block.trim();
-      if (!trimmed || trimmed.startsWith(":")) continue;
-
-      const lines = trimmed.split("\n");
-      let event = "message";
-      let data  = "";
-
-      for (const line of lines) {
-        if (line.startsWith("event:")) event = line.replace("event:", "").trim();
-        else if (line.startsWith("data:")) data += line.replace("data:", "").trim();
-      }
-      if (data) parsed.push({ event, data });
-    }
-    return parsed;
-  }, []);
+  // SSE parser is now handled by native event listeners
 
   // ── Snapshot Recorder (Every 5s) ────────────────────────────────────────
   const takeSnapshot = useCallback((currentBuffer, now) => {
@@ -139,9 +116,8 @@ export function EEGStreamProvider({ children }) {
 
   // ── Core stream runner ───────────────────────────────────────────────────
   const runStream = useCallback(async () => {
-    if (abortRef.current && !abortRef.current.signal.aborted) return;
+    if (esRef.current) return;
 
-    bufferRef.current      = "";
     lastSnapshotT.current = Date.now();
     streamStartT.current  = Date.now();
     sessionRef.current     = [];
@@ -149,79 +125,76 @@ export function EEGStreamProvider({ children }) {
     setStreaming(true);
     setStatus("connecting");
     setConnectionStatus("connecting");
+    setHasReceivedFirstPacket(false);
 
     const token = localStorage.getItem("ni_token");
-    const controller = new AbortController();
-    abortRef.current = controller;
+    const streamUrl = `${SSE_URL}?token=${token}`;
+    
+    // 1. Create EventSource correctly
+    const es = new EventSource(streamUrl, { withCredentials: true });
+    esRef.current = es;
 
-    try {
-      const response = await fetch(SSE_URL, {
-        signal: controller.signal,
-        headers: { "Authorization": `Bearer ${token}` }
-      });
+    // 2. Handle connection handshake
+    es.addEventListener("connected", () => {
+      console.log("[SSE] Connected event received");
+      setConnectionStatus("connected");
+      setStatus("live");
+    });
 
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    // 3. Handle EEG packets (CRITICAL)
+    es.addEventListener("eeg", (event) => {
+      try {
+        const pkt = JSON.parse(event.data);
+        const now = Date.now();
+        console.log("[SSE] EEG packet received", pkt.epoch_id);
+
+        setHasReceivedFirstPacket(true); // THIS HIDES LOADER
+
+        // Update sliding window buffer (60 seconds)
+        setEegBuffer(prev => {
+          const next = [...prev, pkt].filter(s => now - (s.timestamp || now) < 60000);
+          takeSnapshot(next, now);
+          return next;
+        });
+
+        // Update status/metrics/prediction
+        setLatestSample(pkt);
+        setMetrics({
+          attention: pkt.attention,
+          relaxation: pkt.relaxation,
+          stress: pkt.stress,
+          engagement: pkt.engagement
+        });
+        setPrediction(pkt.prediction);
+
+        localStorage.setItem("neuro_last_session", event.data);
+      } catch (err) {
+        console.error("[SSE] EEG parse error", err);
+      }
+    });
+
+    // 4. Handle errors
+    es.addEventListener("error", (event) => {
+      console.error("[SSE] Stream error", event);
+      setConnectionStatus("error");
+      setError("Stream connection error occurred.");
       
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      readerRef.current = reader;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const events = parseSSEChunk(decoder.decode(value, { stream: true }));
-        
-        for (const { event, data } of events) {
-          if (event === "connected") {
-            setConnectionStatus("connected");
-            setStatus("live");
-            continue;
-          }
-
-          if (event === "eeg") {
-            try {
-              const pkt = JSON.parse(data);
-              const now = Date.now();
-
-              // 1. Update sliding window buffer (60 seconds)
-              setEegBuffer(prev => {
-                const next = [...prev, pkt].filter(s => now - (s.timestamp || now) < 60000);
-                takeSnapshot(next, now);
-                return next;
-              });
-
-              // 2. Update status/metrics/prediction
-              setLatestSample(pkt);
-              setMetrics({
-                attention: pkt.attention,
-                relaxation: pkt.relaxation,
-                stress: pkt.stress,
-                engagement: pkt.engagement
-              });
-              setPrediction(pkt.prediction);
-
-              localStorage.setItem("neuro_last_session", data);
-            } catch (e) { console.error("[SSE] Parse error", e); }
-          }
-        }
+      // Auto-cleanup on error to trigger reconnect or stop
+      if (esRef.current) {
+        esRef.current.close();
+        esRef.current = null;
       }
-    } catch (err) {
-      if (err.name !== "AbortError") {
-        setError(err.message);
-        setConnectionStatus("error");
-      }
-    }
 
-    if (intentRef.current) {
-      reconnTimerRef.current = setTimeout(() => runStream(), RECONNECT_DELAY);
-    } else {
-      finalizeSession(); // <--- SAVE ON STOP
-      setStreaming(false);
-      setConnectionStatus("closed");
-      setStatus("idle");
-    }
-  }, [parseSSEChunk, takeSnapshot, finalizeSession]);
+      if (intentRef.current) {
+        reconnTimerRef.current = setTimeout(() => runStream(), RECONNECT_DELAY);
+      } else {
+        finalizeSession();
+        setStreaming(false);
+        setConnectionStatus("closed");
+        setStatus("idle");
+      }
+    });
+  }, [takeSnapshot, finalizeSession]);
 
   const startStream = useCallback(() => {
     intentRef.current = true;
@@ -231,9 +204,15 @@ export function EEGStreamProvider({ children }) {
   const stopStream = useCallback(() => {
     intentRef.current = false;
     clearTimeout(reconnTimerRef.current);
-    if (abortRef.current) abortRef.current.abort();
-    // finalizeSession is called at the end of runStream catch/finally block if intent=false
-  }, []);
+    if (esRef.current) {
+      esRef.current.close();
+      esRef.current = null;
+    }
+    finalizeSession();
+    setStreaming(false);
+    setConnectionStatus("closed");
+    setStatus("idle");
+  }, [finalizeSession]);
 
   const clearHistory = useCallback(() => {
     if (confirm("Permanently delete all session history?")) {
@@ -256,13 +235,16 @@ export function EEGStreamProvider({ children }) {
 
   useEffect(() => () => {
     intentRef.current = false;
-    if (abortRef.current) abortRef.current.abort();
+    if (esRef.current) {
+      esRef.current.close();
+      esRef.current = null;
+    }
   }, []);
 
   return (
     <EEGStreamContext.Provider
       value={{
-        streaming, status, connectionStatus, 
+        streaming, status, connectionStatus, hasReceivedFirstPacket,
         eegBuffer, latestSample, metrics,
         prediction, sessionCount, error,
         sessions, startStream, stopStream, clearHistory, restoreSession,
