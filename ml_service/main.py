@@ -43,13 +43,13 @@ app = FastAPI(
 )
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
-# Explicitly allowing all origins for the symposium demo to ensure no connection issues
+# Using allow_origin_regex to permit all origins while allow_credentials=True
 app.add_middleware(
     CORSMiddleware,
-    allow_origins     = ["*"],
-    allow_credentials = True,
-    allow_methods     = ["*"],
-    allow_headers     = ["*"],
+    allow_origin_regex = ".*",
+    allow_credentials  = True,
+    allow_methods      = ["*"],
+    allow_headers      = ["*"],
 )
 
 # ── Routers ───────────────────────────────────────────────────────────────────

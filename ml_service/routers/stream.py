@@ -1,26 +1,24 @@
+import logging
 from fastapi import APIRouter, Request
 from sse_starlette.sse import EventSourceResponse
 from services.eeg_streamer import stream
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 @router.get("/api/eeg/stream")
 async def eeg_stream(request: Request):
-    async def event_generator():
-        async for event in stream():
-            # stop streaming if client disconnects
-            if await request.is_disconnected():
-                print("[STREAM] Client disconnected")
-                break
-            yield event
-
+    """
+    Production-safe SSE router.
+    Uses sse-starlette to handle pings and keep-alives automatically.
+    """
     return EventSourceResponse(
-        event_generator(),
-        ping=10,  # CRITICAL: keeps connection alive behind proxies
+        stream(),
+        ping=15,  # Send a :ping\n\n every 15 seconds
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"  # CRITICAL for Render/Nginx
+            "X-Accel-Buffering": "no"  # Critical for Render/Nginx to prevent buffering
         }
     )
