@@ -9,7 +9,7 @@ const express = require("express");
 const { protect } = require("../middleware/authMiddleware");
 
 const router  = express.Router();
-const ML_URL  = () => process.env.ML_SERVICE_URL || "http://localhost:8000";
+const ML_URL  = () => process.env.ML_SERVICE_URL;
 
 // ── GET /api/eeg/stream ───────────────────────────────────────────────────
 router.get("/stream", protect, async (req, res) => {

@@ -16,6 +16,12 @@ connectDB();
 const app  = express();
 const PORT = process.env.PORT || 5000;
 
+// ── Validation ─────────────────────────────────────────────────────────────
+if (!process.env.ML_SERVICE_URL) {
+  console.error("\n❌ FATAL ERROR: ML_SERVICE_URL is not defined in environment variables.\n");
+  process.exit(1);
+}
+
 // ── Middleware ─────────────────────────────────────────────────────────────
 app.use(cors({
   origin: process.env.FRONTEND_URL || [
@@ -60,7 +66,7 @@ app.use((err, _req, res, _next) => {
 // ── Listen ─────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`\n[NeuroInsight Backend] listening on http://localhost:${PORT}`);
-  console.log(`  ML Service → ${process.env.ML_SERVICE_URL || "http://localhost:8000"}`);
+  console.log(`  ML Service → ${process.env.ML_SERVICE_URL}`);
   console.log(`  MongoDB    → ${process.env.MONGO_URI?.replace(/\/\/.*@/, "//***@") || "see .env"}\n`);
 });
 

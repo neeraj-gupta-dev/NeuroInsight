@@ -88,6 +88,7 @@ npm run dev
 2.  Create two **Web Services** (one for `ml_service`, one for `backend`).
 3.  Set the **Root Directory** for each service accordingly.
 4.  Configure Environment Variables (see `.env.example`).
+    *   **CRITICAL:** Ensure `ML_SERVICE_URL` is set to your deployed ML service URL (e.g., `https://neuroinsight-te9b.onrender.com`).
 
 ### Frontend (Vercel)
 1.  Import the repository to Vercel.
