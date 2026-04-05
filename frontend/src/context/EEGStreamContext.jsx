@@ -18,263 +18,254 @@ const RECONNECT_DELAY  = 1500; // ms to wait before reconnecting
 export function EEGStreamProvider({ children }) {
   // ── Visible state (drives UI) ───────────────────────────────────────────
   const [streaming,    setStreaming]    = useState(false);
-  const [status,       setStatus]      = useState("idle"); // idle|connecting|live|error
-  const [eegHistory,   setEegHistory]  = useState([]);
+  const [status,       setStatus]      = useState("idle");
+  const [connectionStatus, setConnectionStatus] = useState("closed");
+  
+  // Real-time data stores
+  const [eegBuffer,    setEegBuffer]   = useState([]); // Sliding window (60s)
+  const [latestSample, setLatestSample] = useState(null);
+  const [metrics,      setMetrics]     = useState({
+    attention: 0, relaxation: 0, stress: 0, engagement: 0
+  });
+
   const [prediction,   setPrediction]  = useState(null);
+  const [sessions,     setSessions]    = useState(() => {
+    try {
+      const saved = localStorage.getItem("neuro_sessions");
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
   const [sessionCount, setSessionCount] = useState(0);
   const [error,        setError]       = useState(null);
 
   // ── Internal refs (never trigger re-renders) ────────────────────────────
-  const abortRef       = useRef(null);   // AbortController for the fetch
-  const readerRef      = useRef(null);   // ReadableStreamDefaultReader
-  const bufferRef      = useRef("");     // SSE chunk accumulation buffer
-  const intentRef      = useRef(false);  // true = user WANTS stream running
-  const reconnTimerRef = useRef(null);   // reconnect setTimeout handle
-  const saveCounterRef = useRef(0);      // counter for periodic DB saves
+  const abortRef       = useRef(null);
+  const readerRef      = useRef(null);
+  const bufferRef      = useRef("");
+  const intentRef      = useRef(false);
+  const reconnTimerRef = useRef(null);
+  const saveCounterRef = useRef(0);
+  
+  // Session Recording Refs
+  const sessionRef     = useRef([]); // Array of 5s snapshots
+  const lastSnapshotT  = useRef(0);  // Last time a snapshot was taken
+  const streamStartT   = useRef(0);
 
   // ── SSE chunk parser ────────────────────────────────────────────────────
   const parseSSEChunk = useCallback((raw) => {
     bufferRef.current += raw;
     const blocks = bufferRef.current.split("\n\n");
-    bufferRef.current = blocks.pop(); // keep incomplete tail
+    bufferRef.current = blocks.pop();
 
     const parsed = [];
     for (const block of blocks) {
-      // Skip SSE heartbeat comments (": " lines sent by Express)
-      if (block.trim().startsWith(":")) continue;
+      const trimmed = block.trim();
+      if (!trimmed || trimmed.startsWith(":")) continue;
 
-      const dataLine = block.split("\n").find((l) => l.startsWith("data:"));
-      if (!dataLine) continue;
-      try {
-        parsed.push(JSON.parse(dataLine.replace(/^data:\s*/, "")));
-      } catch {
-        // ignore malformed frame
+      const lines = trimmed.split("\n");
+      let event = "message";
+      let data  = "";
+
+      for (const line of lines) {
+        if (line.startsWith("event:")) event = line.replace("event:", "").trim();
+        else if (line.startsWith("data:")) data += line.replace("data:", "").trim();
       }
+      if (data) parsed.push({ event, data });
     }
     return parsed;
   }, []);
 
-  // ── Save one event to MongoDB (every 5th) ───────────────────────────────
-  const saveSession = useCallback(async (evt) => {
-    if (!evt?.prediction) return;
-    try {
-      await API.post("/api/sessions", {
-        cognitiveState:   evt.prediction.cognitive_state,
-        confidence:       evt.prediction.confidence,
-        epochId:          evt.epoch_id,
-        subject:          evt.subject,
-        features:         evt.features,
-        shapValues:       evt.prediction.shap_values,
-        allProbabilities: evt.prediction.all_probabilities,
-      });
-      setSessionCount((n) => n + 1);
-    } catch {
-      /* silent — never block stream due to DB error */
-    }
+  // ── Snapshot Recorder (Every 5s) ────────────────────────────────────────
+  const takeSnapshot = useCallback((currentBuffer, now) => {
+    if (now - lastSnapshotT.current < 5000) return;
+    
+    // Calculate averages from the buffer for the last 5 seconds
+    const recent = currentBuffer.filter(s => now - s.timestamp < 5000);
+    if (recent.length === 0) return;
+
+    const avg = (key) => recent.reduce((sum, s) => sum + (s[key] || 0), 0) / recent.length;
+
+    const snapshot = {
+      timestamp: now,
+      duration:  Math.round((now - streamStartT.current) / 1000),
+      attention:  Math.round(avg("attention")),
+      relaxation: Math.round(avg("relaxation")),
+      stress:     Math.round(avg("stress")),
+      engagement: Math.round(avg("engagement")),
+    };
+
+    sessionRef.current.push(snapshot);
+    lastSnapshotT.current = now;
   }, []);
 
-  // ── Core stream runner ───────────────────────────────────────────────────
-  // This function is called by startStream and also by the auto-reconnect.
-  // It does NOT set intentRef — callers control that.
-  const runStream = useCallback(async () => {
-    // Guard: if we're already connected, do nothing
-    if (abortRef.current && !abortRef.current.signal.aborted) return;
-
-    bufferRef.current = "";
-    setError(null);
-    setStatus("connecting");
-    setStreaming(true);
-
-    const token = localStorage.getItem("ni_token");
-    if (!token) {
-      console.error("[SSE] No auth token — cannot start stream");
-      setStatus("error");
-      setError("Not authenticated");
-      setStreaming(false);
+  // ── Finalize & Save Session ──────────────────────────────────────────────
+  const finalizeSession = useCallback(() => {
+    if (sessionRef.current.length < 2) {
+      sessionRef.current = [];
       return;
     }
 
+    const snaps = sessionRef.current;
+    const avg = (key) => snaps.reduce((sum, s) => sum + s[key], 0) / snaps.length;
+    const max = (key) => Math.max(...snaps.map(s => s[key]));
+
+    const newSession = {
+      id: `session_${Date.now()}`,
+      startTime: streamStartT.current,
+      endTime: Date.now(),
+      duration: Math.round((Date.now() - streamStartT.current) / 1000),
+      snapshots: snaps,
+      averages: {
+        attention:  Math.round(avg("attention")),
+        relaxation: Math.round(avg("relaxation")),
+        stress:     Math.round(avg("stress")),
+        engagement: Math.round(avg("engagement")),
+      },
+      peaks: {
+        maxAttention:  Math.round(max("attention")),
+        maxStress:     Math.round(max("stress")),
+        maxEngagement: Math.round(max("engagement")),
+      }
+    };
+
+    setSessions(prev => {
+      const next = [newSession, ...prev].slice(0, 50); // FIFO cap 50
+      localStorage.setItem("neuro_sessions", JSON.stringify(next));
+      return next;
+    });
+
+    sessionRef.current = [];
+  }, []);
+
+  // ── Core stream runner ───────────────────────────────────────────────────
+  const runStream = useCallback(async () => {
+    if (abortRef.current && !abortRef.current.signal.aborted) return;
+
+    bufferRef.current      = "";
+    lastSnapshotT.current = Date.now();
+    streamStartT.current  = Date.now();
+    sessionRef.current     = [];
+    setError(null);
+    setStreaming(true);
+    setStatus("connecting");
+    setConnectionStatus("connecting");
+
+    const token = localStorage.getItem("ni_token");
     const controller = new AbortController();
     abortRef.current = controller;
 
     try {
-      console.log("[SSE] CONNECTING to", SSE_URL);
-
       const response = await fetch(SSE_URL, {
         signal: controller.signal,
-        headers: {
-          "Authorization": `Bearer ${token}`,
-          "Accept":         "text/event-stream",
-          "Cache-Control":  "no-cache",
-        },
-        cache:     "no-store",
-        keepalive: true,
+        headers: { "Authorization": `Bearer ${token}` }
       });
 
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status} ${response.statusText}`);
-      }
-
-      console.log("[SSE] CONNECTED — reading stream");
-      setStatus("live");
-
-      const reader  = response.body.getReader();
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      
+      const reader = response.body.getReader();
       const decoder = new TextDecoder();
       readerRef.current = reader;
 
       while (true) {
         const { done, value } = await reader.read();
+        if (done) break;
 
-        if (done) {
-          console.log("[SSE] DISCONNECTED — stream ended (done=true)");
-          break;
-        }
-
-        const raw    = decoder.decode(value, { stream: true });
-        const events = parseSSEChunk(raw);
-
-        for (const evt of events) {
-          console.log("[SSE] MESSAGE RECEIVED", evt?.epoch_id);
-
-          if (evt?.error) {
-            setError(String(evt.error));
+        const events = parseSSEChunk(decoder.decode(value, { stream: true }));
+        
+        for (const { event, data } of events) {
+          if (event === "connected") {
+            setConnectionStatus("connected");
+            setStatus("live");
             continue;
           }
 
-          // Update chart
-          if (evt?.features) {
-            setEegHistory((prev) => {
-              const point = {
-                t: prev.length,
-                ...Object.fromEntries(
-                  Object.entries(evt.features).map(([k, v]) => [
-                    k, parseFloat(Number(v).toFixed(4)),
-                  ])
-                ),
-              };
-              const next = [...prev, point];
-              return next.length > MAX_CHART_POINTS
-                ? next.slice(-MAX_CHART_POINTS)
-                : next;
-            });
-          }
-
-          // Update prediction
-          if (evt?.prediction) {
-            setPrediction({
-              ...evt.prediction,
-              epochId: evt.epoch_id,
-              subject: evt.subject,
-            });
-
-            saveCounterRef.current++;
-            if (saveCounterRef.current % 5 === 0) saveSession(evt);
-
-            // Persist to localStorage for across-refresh restoration
+          if (event === "eeg") {
             try {
-              localStorage.setItem("neuro_last_session", JSON.stringify(evt));
-            } catch { /* storage full — ignore */ }
+              const pkt = JSON.parse(data);
+              const now = Date.now();
+
+              // 1. Update sliding window buffer (60 seconds)
+              setEegBuffer(prev => {
+                const next = [...prev, pkt].filter(s => now - (s.timestamp || now) < 60000);
+                takeSnapshot(next, now);
+                return next;
+              });
+
+              // 2. Update status/metrics/prediction
+              setLatestSample(pkt);
+              setMetrics({
+                attention: pkt.attention,
+                relaxation: pkt.relaxation,
+                stress: pkt.stress,
+                engagement: pkt.engagement
+              });
+              setPrediction(pkt.prediction);
+
+              localStorage.setItem("neuro_last_session", data);
+            } catch (e) { console.error("[SSE] Parse error", e); }
           }
         }
       }
-
     } catch (err) {
-      if (err.name === "AbortError") {
-        console.log("[SSE] DISCONNECTED — aborted by user");
-        return; // intentional stop — do NOT reconnect
+      if (err.name !== "AbortError") {
+        setError(err.message);
+        setConnectionStatus("error");
       }
-      console.error("[SSE] ERROR:", err.message);
-      setError(err.message);
     }
 
-    // ── If we reach here without intent=false, schedule reconnect ─────────
     if (intentRef.current) {
-      console.log(`[SSE] RECONNECTING in ${RECONNECT_DELAY}ms…`);
-      setStatus("connecting");
-      reconnTimerRef.current = setTimeout(() => {
-        if (intentRef.current) runStream();
-      }, RECONNECT_DELAY);
+      reconnTimerRef.current = setTimeout(() => runStream(), RECONNECT_DELAY);
     } else {
+      finalizeSession(); // <--- SAVE ON STOP
       setStreaming(false);
+      setConnectionStatus("closed");
       setStatus("idle");
     }
-  }, [parseSSEChunk, saveSession]);
+  }, [parseSSEChunk, takeSnapshot, finalizeSession]);
 
-  // ── Public: start ────────────────────────────────────────────────────────
   const startStream = useCallback(() => {
-    if (intentRef.current) return; // already want stream
     intentRef.current = true;
-    clearTimeout(reconnTimerRef.current);
     runStream();
   }, [runStream]);
 
-  // ── Public: stop ─────────────────────────────────────────────────────────
   const stopStream = useCallback(() => {
-    if (!intentRef.current) return;
-    console.log("[SSE] Stopping stream by user request");
     intentRef.current = false;
     clearTimeout(reconnTimerRef.current);
-
-    // Abort fetch — this throws AbortError in runStream, which will NOT reconnect
-    if (abortRef.current) {
-      abortRef.current.abort();
-      abortRef.current = null;
-    }
-    if (readerRef.current) {
-      readerRef.current.cancel().catch(() => {});
-      readerRef.current = null;
-    }
-
-    setStreaming(false);
-    setStatus("idle");
+    if (abortRef.current) abortRef.current.abort();
+    // finalizeSession is called at the end of runStream catch/finally block if intent=false
   }, []);
 
-  // ── Public: clear ────────────────────────────────────────────────────────
   const clearHistory = useCallback(() => {
-    localStorage.removeItem("neuro_last_session");
-    setEegHistory([]);
-    setPrediction(null);
-    setSessionCount(0);
-    saveCounterRef.current = 0;
-    setError(null);
-    setStatus(streaming ? "live" : "idle");
-  }, [streaming]);
+    if (confirm("Permanently delete all session history?")) {
+      localStorage.removeItem("neuro_sessions");
+      setSessions([]);
+    }
+  }, []);
 
-  // ── Public: restore last session from localStorage ───────────────────────
   const restoreSession = useCallback((data) => {
     if (!data) return;
-    const point = {
-      t: 0,
-      ...Object.fromEntries(
-        Object.entries(data.features ?? {}).map(([k, v]) => [
-          k, parseFloat(Number(v).toFixed(4)),
-        ])
-      ),
-    };
-    setEegHistory([point]);
-    if (data.prediction) {
-      setPrediction({
-        ...data.prediction,
-        epochId: data.epoch_id,
-        subject: data.subject,
-      });
-    }
+    setLatestSample(data);
+    setPrediction(data.prediction);
+    setMetrics({
+      attention: data.attention,
+      relaxation: data.relaxation,
+      stress: data.stress,
+      engagement: data.engagement
+    });
   }, []);
 
-  // ── Cleanup on provider unmount (app close / logout) ─────────────────────
-  useEffect(() => {
-    return () => {
-      intentRef.current = false;
-      clearTimeout(reconnTimerRef.current);
-      if (abortRef.current) abortRef.current.abort();
-    };
+  useEffect(() => () => {
+    intentRef.current = false;
+    if (abortRef.current) abortRef.current.abort();
   }, []);
 
   return (
     <EEGStreamContext.Provider
       value={{
-        streaming, status, eegHistory, prediction, sessionCount, error,
-        startStream, stopStream, clearHistory, restoreSession,
+        streaming, status, connectionStatus, 
+        eegBuffer, latestSample, metrics,
+        prediction, sessionCount, error,
+        sessions, startStream, stopStream, clearHistory, restoreSession,
       }}
     >
       {children}

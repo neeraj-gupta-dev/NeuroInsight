@@ -23,7 +23,7 @@ export default function Register() {
     setLoading(true);
     try {
       await register(form.name, form.email, form.password);
-      navigate("/dashboard");
+      navigate("/app");
     } catch (err) {
       setError(err.response?.data?.message || "Registration failed.");
     } finally {
@@ -55,7 +55,7 @@ export default function Register() {
             Create your account
           </h1>
           <p className="text-sm mt-1" style={{ color: "#6B8BAE" }}>
-            Join NeuroInsight 2.0 to start monitoring cognitive states
+            Join NeuroInsight 2.2 to start monitoring cognitive states
           </p>
         </div>
 

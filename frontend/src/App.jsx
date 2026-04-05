@@ -6,6 +6,7 @@ import Login     from "./pages/Login";
 import Register  from "./pages/Register";
 import Dashboard from "./pages/Dashboard";
 import History   from "./pages/History";
+import LandingPage from "./pages/LandingPage";
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -20,7 +21,7 @@ function ProtectedRoute({ children }) {
 function GuestRoute({ children }) {
   const { user, loading } = useAuth();
   if (loading) return null;
-  return user ? <Navigate to="/dashboard" replace /> : children;
+  return user ? <Navigate to="/app" replace /> : children;
 }
 
 export default function App() {
@@ -28,12 +29,12 @@ export default function App() {
     <AuthProvider>
       <EEGStreamProvider>
         <Routes>
-          <Route path="/"          element={<Navigate to="/dashboard" replace />} />
+          <Route path="/"          element={<LandingPage />} />
           <Route path="/login"     element={<GuestRoute><Login /></GuestRoute>} />
           <Route path="/register"  element={<GuestRoute><Register /></GuestRoute>} />
-          <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+          <Route path="/app"       element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
           <Route path="/history"   element={<ProtectedRoute><History /></ProtectedRoute>} />
-          <Route path="*"          element={<Navigate to="/dashboard" replace />} />
+          <Route path="*"          element={<Navigate to="/" replace />} />
         </Routes>
       </EEGStreamProvider>
     </AuthProvider>

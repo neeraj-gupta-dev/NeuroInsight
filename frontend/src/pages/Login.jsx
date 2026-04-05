@@ -20,7 +20,7 @@ export default function Login() {
     setLoading(true);
     try {
       await login(form.email, form.password);
-      navigate("/dashboard");
+      navigate("/app");
     } catch (err) {
       setError(err.response?.data?.message || "Login failed. Please try again.");
     } finally {
@@ -54,7 +54,7 @@ export default function Login() {
             Welcome back
           </h1>
           <p className="text-sm mt-1" style={{ color: "#6B8BAE" }}>
-            Sign in to NeuroInsight 2.0
+            Sign in to NeuroInsight 2.2
           </p>
         </div>
 
@@ -133,7 +133,7 @@ export default function Login() {
         </div>
 
         <p className="text-center text-xs mt-6" style={{ color: "#6B8BAE" }}>
-          NeuroInsight 2.0 · PhysioNet EEGBCI · Explainable AI
+          NeuroInsight 2.2 · PhysioNet EEGBCI · Explainable AI
         </p>
       </motion.div>
     </div>

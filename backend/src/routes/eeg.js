@@ -1,10 +1,10 @@
 // backend/src/routes/eeg.js
 //
-// GET  /api/eeg/stream  — SSE proxy to FastAPI /stream-eeg (auth via ?token=)
+// GET  /api/eeg/stream  — SSE proxy to FastAPI /stream-eeg
 // POST /api/eeg/predict — proxy to FastAPI /predict
 //
-// Uses native Node.js https/http module for streaming to avoid ESM issues
-// with node-fetch v3 in production (Render runs CJS).
+// Uses native Node.js http/https — avoids all node-fetch ESM/CJS issues.
+// This is a TRUE streaming passthrough: every chunk from ML → browser immediately.
 
 const http    = require("http");
 const https   = require("https");
@@ -15,49 +15,53 @@ const router = express.Router();
 const ML_URL = () => process.env.ML_SERVICE_URL;
 
 // ── GET /api/eeg/stream ────────────────────────────────────────────────────
-// Acts as a transparent SSE proxy between the browser and FastAPI.
-// Uses native Node http/https to avoid node-fetch ESM incompatibilities.
-router.get("/stream", protect, async (req, res) => {
+router.get("/stream", protect, (req, res) => {
   const mlUrl = ML_URL();
   if (!mlUrl) {
-    res.write(`event: error\ndata: ML_SERVICE_URL not configured\n\n`);
+    res.writeHead(200, { "Content-Type": "text/event-stream" });
+    res.write("event: error\ndata: ML_SERVICE_URL not configured\n\n");
     return res.end();
   }
 
-  // 1. Correct SSE headers — exact set needed for Render/Vercel proxy chain
-  res.setHeader("Content-Type",      "text/event-stream");
-  res.setHeader("Cache-Control",     "no-cache, no-transform");
-  res.setHeader("Connection",        "keep-alive");
-  res.setHeader("X-Accel-Buffering", "no");
-  res.setHeader("Access-Control-Allow-Origin", process.env.FRONTEND_URL || "*");
-  res.flushHeaders();
+  // ── 1. SSE response headers — exact set required for Render+Vercel chain ─
+  res.setHeader("Content-Type",               "text/event-stream");
+  res.setHeader("Cache-Control",              "no-cache, no-transform");
+  res.setHeader("Connection",                 "keep-alive");
+  res.setHeader("X-Accel-Buffering",          "no");   // disables Nginx buffering
+  res.setHeader("X-Content-Type-Options",     "nosniff");
+  res.setHeader("Transfer-Encoding",          "chunked");
+  res.flushHeaders(); // CRITICAL: send headers NOW before any async work
 
-  // 2. Disable socket timeouts so Render doesn't kill the idle connection
+  // ── 2. Disable socket-level timeouts ──────────────────────────────────────
   if (req.socket) req.socket.setTimeout(0);
   if (res.socket) res.socket.setTimeout(0);
 
-  // 3. Heartbeat — Render kills connections with > 30s inactivity
+  // ── 3. Send immediate "connected" event so Vercel/Render don't timeout ────
+  res.write("event: connected\ndata: ok\n\n");
+  if (typeof res.flush === "function") res.flush();
+
+  // ── 4. Heartbeat (every 20s) — keeps the connection alive through proxies ─
   const heartbeat = setInterval(() => {
-    try { res.write(":\n\n"); } catch (_) {}
+    try {
+      res.write(":\n\n"); // SSE comment — invisible to client JS, keeps TCP alive
+      if (typeof res.flush === "function") res.flush();
+    } catch (_) {}
   }, 20000);
 
-  // 4. Parse target URL
-  const target = new URL(`${mlUrl}/stream-eeg`);
-  const lib    = target.protocol === "https:" ? https : http;
+  // ── 5. Client disconnect tracking ─────────────────────────────────────────
+  let clientGone  = false;
+  let upstreamReq = null;
 
-  // 5. Track whether the client has disconnected
-  let clientGone = false;
   req.on("close", () => {
     clientGone = true;
     clearInterval(heartbeat);
-    try { res.end(); } catch (_) {}
     if (upstreamReq) {
       try { upstreamReq.destroy(); } catch (_) {}
     }
   });
 
-  // 6. Open upstream request using native http/https
-  let upstreamReq = null;
+  // ── 6. Open upstream connection to FastAPI ML service ─────────────────────
+  const target = new URL(`${mlUrl}/stream-eeg`);
 
   upstreamReq = lib.request(
     {
@@ -65,32 +69,38 @@ router.get("/stream", protect, async (req, res) => {
       port:     target.port || (target.protocol === "https:" ? 443 : 80),
       path:     target.pathname + target.search,
       method:   "GET",
+      // Disable Node's internal response buffering for this socket
+      agent:    false,
       headers: {
-        "Accept":        "text/event-stream",
-        "Cache-Control": "no-cache",
-        "Connection":    "keep-alive",
+        "Accept":           "text/event-stream",
+        "Cache-Control":    "no-cache",
+        "Connection":       "keep-alive",
+        "X-Forwarded-For":  req.ip || "",
       },
     },
     (upstream) => {
-      // Non-200 from ML service
+      // ── Non-200 response from ML service ──────────────────────────────────
       if (upstream.statusCode !== 200) {
-        console.error(`[eeg/stream] ML service returned ${upstream.statusCode}`);
+        console.error(`[SSE PROXY] ML service returned HTTP ${upstream.statusCode}`);
         if (!clientGone) {
-          res.write(`event: error\ndata: ML_STREAM_FAILED (${upstream.statusCode})\n\n`);
-          res.end();
+          try {
+            res.write(`event: error\ndata: ML_STREAM_FAILED (${upstream.statusCode})\n\n`);
+            if (typeof res.flush === "function") res.flush();
+            res.end();
+          } catch (_) {}
         }
         clearInterval(heartbeat);
         return;
       }
 
-      // 7. Pipe bytes directly — no buffering, no transformation
+      // ── Pipe every chunk from ML → browser immediately ────────────────────
       upstream.on("data", (chunk) => {
-        if (!clientGone) {
-          try {
-            res.write(chunk);
-            // If compression middleware added res.flush, call it
-            if (typeof res.flush === "function") res.flush();
-          } catch (_) {}
+        if (clientGone) return;
+        try {
+          res.write(chunk);
+          if (typeof res.flush === "function") res.flush();
+        } catch (err) {
+          console.error("[SSE PROXY] res.write failed:", err.message);
         }
       });
 
@@ -102,11 +112,12 @@ router.get("/stream", protect, async (req, res) => {
       });
 
       upstream.on("error", (err) => {
-        console.error("[eeg/stream] Upstream error:", err.message);
+        console.error("[SSE PROXY] Upstream stream error:", err.message);
         clearInterval(heartbeat);
         if (!clientGone) {
           try {
             res.write(`event: error\ndata: ML_STREAM_FAILED\n\n`);
+            if (typeof res.flush === "function") res.flush();
             res.end();
           } catch (_) {}
         }
@@ -115,17 +126,18 @@ router.get("/stream", protect, async (req, res) => {
   );
 
   upstreamReq.on("error", (err) => {
-    console.error("[eeg/stream] Cannot connect to ML service:", err.message);
+    console.error("[SSE PROXY] Cannot connect to ML service:", err.message);
     clearInterval(heartbeat);
     if (!clientGone) {
       try {
         res.write(`event: error\ndata: ML_SERVICE_UNAVAILABLE\n\n`);
+        if (typeof res.flush === "function") res.flush();
         res.end();
       } catch (_) {}
     }
   });
 
-  // Set timeout on upstream request to 0 to prevent Render killing it
+  // ── 7. Disable upstream socket timeout ────────────────────────────────────
   upstreamReq.setTimeout(0);
   upstreamReq.end();
 });

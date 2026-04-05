@@ -1,4 +1,3 @@
-// frontend/src/pages/Dashboard.jsx
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Navbar            from "../components/Navbar";
@@ -6,26 +5,27 @@ import EEGChart          from "../components/EEGChart";
 import CognitiveStateCard from "../components/CognitiveStateCard";
 import ConfidenceMeter   from "../components/ConfidenceMeter";
 import SHAPChart         from "../components/SHAPChart";
+import MetricsGauge      from "../components/MetricsGauge";
+import PerformanceChart  from "../components/PerformanceChart";
 import { useEEGStream }  from "../hooks/useEEGStream";
 
 const STATUS_CONFIG = {
-  idle:        { color: "#6B8BAE", label: "Idle",        dot: "#6B8BAE" },
-  connecting:  { color: "#FFD700", label: "Connecting…", dot: "#FFD700" },
+  idle:        { color: "#6B8BAE", label: "System Idle",  dot: "#6B8BAE" },
+  connecting:  { color: "#FFD700", label: "Syncing...",   dot: "#FFD700" },
   live:        { color: "#00FF88", label: "Live Stream",  dot: "#00FF88" },
-  error:       { color: "#FF3366", label: "Error",        dot: "#FF3366" },
+  error:       { color: "#FF3366", label: "Link Error",   dot: "#FF3366" },
 };
 
 export default function Dashboard() {
   const {
-    streaming, eegHistory, prediction,
-    sessionCount, error, status,
+    streaming, eegBuffer, prediction, metrics,
+    error, status, connectionStatus,
     startStream, stopStream, clearHistory,
     restoreSession,
   } = useEEGStream();
 
   const [isRestored, setIsRestored] = useState(false);
 
-  // Restore session from localStorage on mount
   useEffect(() => {
     const saved = localStorage.getItem("neuro_last_session");
     if (saved) {
@@ -33,172 +33,151 @@ export default function Dashboard() {
         const data = JSON.parse(saved);
         restoreSession(data);
         setIsRestored(true);
-      } catch (err) {
-        console.error("Failed to restore session:", err);
-      }
+      } catch (err) { console.error("Restore failed", err); }
     }
   }, [restoreSession]);
 
-  // NOTE: Do NOT call stopStream() on unmount.
-  // The stream is managed by EEGStreamContext and persists across navigation.
-
-  // Handle start simulation (clears restoration state)
-  const handleStart = () => {
-    setIsRestored(false);
-    startStream();
-  };
-
-  // Handle clear dashboard (clears restoration state)
-  const handleClear = () => {
-    setIsRestored(false);
-    clearHistory();
-  };
+  const handleStart = () => { setIsRestored(false); startStream(); };
+  const handleClear = () => { setIsRestored(false); clearHistory(); };
 
   const sc = STATUS_CONFIG[status] || STATUS_CONFIG.idle;
+  const hasData = eegBuffer.length > 0;
 
   return (
-    <div className="min-h-screen" style={{ paddingTop: 64 }}>
+    <div className="min-h-screen pb-12" style={{ paddingTop: 64 }}>
       <Navbar />
 
       <div className="max-w-7xl mx-auto px-6 py-8">
-
-        {/* ── Page Header ─────────────────────────────────────────────── */}
-        <motion.div
-          className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8"
-          initial={{ opacity: 0, y: -10 }}
+        {/* Header Section */}
+        <motion.div 
+          className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-10"
+          initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
         >
           <div>
-            <h1 className="font-display font-bold text-2xl" style={{ color: "#E8F4FF" }}>
-              EEG Cognitive Monitor
+            <h1 className="text-3xl font-display font-bold text-white tracking-tight">
+              Neural Command Center
             </h1>
             <p className="text-sm mt-1" style={{ color: "#6B8BAE" }}>
-              PhysioNet EEGBCI · RandomForest + SHAP · Real-time simulation
+              BCI Stream v2.1 • 400ms Sampling • Subject Monitoring
             </p>
           </div>
 
-          {/* Status + controls */}
-          <div className="flex items-center gap-3 flex-wrap">
-            {/* Status badge */}
-            <div
-              className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium"
+          <div className="flex items-center gap-4">
+            <div 
+              className="px-4 py-2 rounded-xl flex items-center gap-3 border transition-all duration-500"
               style={{
-                background: `${sc.dot}18`,
-                border: `1px solid ${sc.dot}44`,
-                color: sc.color,
+                background: `${sc.dot}10`,
+                borderColor: `${sc.dot}30`,
+                color: sc.color
               }}
             >
-              <div className="pulse-dot" style={{ background: sc.dot }} />
-              {sc.label}
+              <div className={`w-2 h-2 rounded-full ${streaming ? 'animate-pulse' : ''}`} style={{ background: sc.dot }} />
+              <span className="text-xs font-bold uppercase tracking-widest">{sc.label}</span>
             </div>
 
-            {/* Session counter */}
-            <div
-              className="px-3 py-2 rounded-lg text-sm font-medium"
-              style={{
-                background: "rgba(0,212,255,0.08)",
-                border: "1px solid rgba(0,212,255,0.2)",
-                color: "#00D4FF",
-              }}
-            >
-              {sessionCount} sessions saved
-            </div>
-
-            {/* Action buttons */}
             {!streaming ? (
-              <button id="btn-start" onClick={handleStart} className="btn-primary">
-                ▶ Start Simulation
+              <button onClick={handleStart} className="btn-primary shadow-lg shadow-cyan-500/20">
+                🚀 Initialize Stream
               </button>
             ) : (
-              <button id="btn-stop" onClick={stopStream} className="btn-danger">
-                ■ Stop
+              <button onClick={stopStream} className="btn-danger shadow-lg shadow-red-500/20">
+                🛑 Terminate
               </button>
             )}
-
-            <button id="btn-clear" onClick={handleClear} className="btn-ghost">
-              Clear
+            
+            <button onClick={handleClear} className="px-4 py-2 text-xs font-bold text-slate-400 hover:text-white transition-colors">
+              Reset
             </button>
           </div>
         </motion.div>
 
-        {/* ── Persistence notification (Only if data was restored) ──────────────── */}
-        <AnimatePresence>
-          {isRestored && !streaming && (
-            <motion.div
-              initial={{ opacity: 0, y: -10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="mb-6 flex justify-center"
-            >
-              <div className="bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-2 shadow-sm border border-yellow-200">
-                <span>⚠️</span>
-                <span>Showing last recorded session</span>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* ── Error banner ─────────────────────────────────────────────── */}
+        {/* Status Messaging */}
         <AnimatePresence>
           {error && (
-            <motion.div
+            <motion.div 
+              className="mb-8 p-4 rounded-2xl border border-red-500/20 bg-red-500/5 text-red-400 text-sm flex items-center gap-3"
               initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: "auto" }}
+              animate={{ opacity: 1, height: 'auto' }}
               exit={{ opacity: 0, height: 0 }}
-              className="mb-6 px-4 py-3 rounded-xl text-sm flex items-center gap-3"
-              style={{ background: "rgba(255,51,102,0.1)", border: "1px solid rgba(255,51,102,0.3)", color: "#FF3366" }}
             >
-              <span>⚠️</span>
-              <span><strong>Stream error:</strong> {error}</span>
-              <span style={{ color: "#6B8BAE" }}>— Is the ML service running on port 8000?</span>
+              <span className="text-lg">⚠️</span>
+              <p><strong>System Error:</strong> {error} — Verify ML cluster status.</p>
             </motion.div>
           )}
         </AnimatePresence>
 
-        {/* ── Main grid ────────────────────────────────────────────────── */}
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+        {/* Main Grid Interface */}
+        <div className="relative">
+          {/* Waiting Overlay */}
+          <AnimatePresence>
+            {streaming && !hasData && (
+              <motion.div 
+                className="absolute inset-0 z-50 rounded-3xl backdrop-blur-md flex flex-col items-center justify-center border border-white/5"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                style={{ background: "rgba(10,15,30,0.4)" }}
+              >
+                <div className="w-16 h-16 border-4 border-cyan-500/20 border-t-cyan-500 rounded-full animate-spin mb-4" />
+                <h3 className="text-xl font-bold text-white mb-2">Syncing Neural Link</h3>
+                <p className="text-sm text-slate-400">Waiting for brain signal packet...</p>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
-          {/* Left column — EEG chart (spans 2 cols) */}
-          <div className="xl:col-span-2 flex flex-col gap-6">
-            <EEGChart data={eegHistory} streaming={streaming} />
-            <SHAPChart prediction={prediction} />
-          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+            {/* Real-time Gauges */}
+            <div className="lg:col-span-1 flex flex-col gap-6">
+              <MetricsGauge 
+                title="Cognitive Stress" 
+                value={metrics.stress} 
+                color="#FF3366" 
+                icon="⚡" 
+              />
+              <MetricsGauge 
+                title="Task Engagement" 
+                value={metrics.engagement} 
+                color="#00D4FF" 
+                icon="🏗️" 
+              />
+              <ConfidenceMeter prediction={prediction} />
+            </div>
 
-          {/* Right column — state + confidence */}
-          <div className="flex flex-col gap-6">
-            <CognitiveStateCard prediction={prediction} />
-            <ConfidenceMeter    prediction={prediction} />
-
-            {/* Info card */}
-            <motion.div
-              className="glass-card p-5"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.3 }}
-            >
-              <p className="text-xs font-semibold uppercase tracking-widest mb-3"
-                style={{ color: "#6B8BAE" }}>
-                System Info
-              </p>
-              <div className="space-y-2 text-xs">
-                {[
-                  ["Dataset",  "PhysioNet EEGBCI"],
-                  ["Subjects", "1 – 5"],
-                  ["Bands",    "δ θ α β γ"],
-                  ["Model",    "RandomForest (n=200)"],
-                  ["XAI",      "SHAP TreeExplainer"],
-                  ["Stream",   "SSE · 600 ms/epoch"],
-                ].map(([k, v]) => (
-                  <div key={k} className="flex justify-between">
-                    <span style={{ color: "#6B8BAE" }}>{k}</span>
-                    <span style={{ color: "#E8F4FF" }}>{v}</span>
-                  </div>
-                ))}
+            {/* Main Visualizations */}
+            <div className="lg:col-span-3 flex flex-col gap-6">
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                <PerformanceChart buffer={eegBuffer} />
+                <CognitiveStateCard prediction={prediction} />
               </div>
-            </motion.div>
+              
+              <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                <div className="xl:col-span-2">
+                  <EEGChart buffer={eegBuffer} streaming={streaming} />
+                </div>
+                <div className="xl:col-span-1">
+                  <SHAPChart prediction={prediction} />
+                </div>
+              </div>
+            </div>
           </div>
         </div>
+
+        {/* Restoration Badge */}
+        <AnimatePresence>
+          {isRestored && !streaming && (
+            <motion.div 
+              className="fixed bottom-8 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full border border-yellow-500/20 bg-yellow-500/10 backdrop-blur-lg text-yellow-500 text-[10px] font-black uppercase tracking-widest flex items-center gap-2"
+              initial={{ y: 50, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 50, opacity: 0 }}
+            >
+              <span className="animate-pulse">●</span> Physical Session Cache Restored
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   );
 }
+

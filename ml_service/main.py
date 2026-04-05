@@ -40,7 +40,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title       = "NeuroInsight ML Service",
     description = "Real-time EEG cognitive state prediction + SHAP explainability",
-    version     = "2.0.0",
+    version     = "2.2.0",
     lifespan    = lifespan,
 )
 
@@ -68,14 +68,14 @@ app.include_router(predict.router, tags=["Prediction"])
 async def root():
     return {
         "status":  "ml service running",
-        "version": "2.0.0"
+        "version": "2.2.0"
     }
 
 @app.get("/health")
 async def health():
     return {
         "status":          "ok",
-        "service":         "NeuroInsight ML Service v2.0",
+        "service":         "NeuroInsight ML Service v2.2",
         "model_loaded":    predictor.is_ready,
         "dataset_loaded":  streamer.is_ready,
     }

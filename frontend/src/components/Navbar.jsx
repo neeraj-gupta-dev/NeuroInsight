@@ -4,7 +4,7 @@ import { motion } from "framer-motion";
 import { useAuth } from "../context/AuthContext";
 
 const NAV_LINKS = [
-  { to: "/dashboard", label: "Dashboard", icon: "⬡" },
+  { to: "/app",     label: "Dashboard", icon: "⬡" },
   { to: "/history",   label: "History",   icon: "◈" },
 ];
 
@@ -15,7 +15,7 @@ export default function Navbar() {
 
   const handleLogout = () => {
     logout();
-    navigate("/login");
+    navigate("/");
   };
 
   return (
@@ -32,7 +32,7 @@ export default function Navbar() {
     >
       <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
         {/* Logo */}
-        <Link to="/dashboard" className="flex items-center gap-3 group">
+        <Link to="/app" className="flex items-center gap-3 group">
           <div
             className="w-9 h-9 rounded-lg flex items-center justify-center text-lg"
             style={{

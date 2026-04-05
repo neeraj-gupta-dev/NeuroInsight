@@ -44,19 +44,17 @@ class EEGStreamer:
             logger.error(f"[streamer] Load failed: {exc}")
             return False
 
-    async def stream(self, delay_ms: int = 600):
+    async def stream(self, delay_ms: int = 400):
         """
         Async generator — yields one SSE-formatted event string per epoch.
-        Loops the dataset indefinitely so the stream never ends.
-
-        Yields:
-            str  formatted as  "data: <json>\\n\\n"
+        Loops the dataset indefinitely.
         """
         if not self._loaded:
             yield "data: " + json.dumps({"error": "Dataset not loaded"}) + "\n\n"
             return
 
-        from services.predictor import predictor  # local import to avoid circular
+        from services.predictor import predictor
+        import time
 
         idx = 0
         total = len(self.df)
@@ -64,23 +62,45 @@ class EEGStreamer:
         while True:
             row = self.df.iloc[idx % total]
             features = {f: float(row[f]) for f in self.feature_names}
+            
+            # --- Cognitive Metric Calculation (Normalized 0-100) ---
+            # Features are log10 power. Convert to linear for ratio calculation.
+            p = {k.replace("_mean", ""): 10**v for k, v in features.items() if "_mean" in k}
+            
+            # Ratios
+            attn_r = p["beta"] / p["theta"] if p["theta"] > 0 else 1.0
+            rex_r  = p["alpha"] / p["beta"] if p["beta"] > 0 else 1.0
+            str_r  = p["beta"] / p["alpha"] if p["alpha"] > 0 else 1.0
+            eng_r  = p["beta"] / (p["alpha"] + p["theta"]) if (p["alpha"] + p["theta"]) > 0 else 1.0
 
-            payload: dict = {
-                "epoch_id": int(self.df.index[idx % total]),
-                "subject":  int(row["subject"]),
-                "features": features,
-                "prediction": None,
+            # Normalization (0-100) - Sigmoid-like mapping for "natural" feel
+            def normalize(val, mid, sensitivity=2.0):
+                return round(100 / (1 + np.exp(-sensitivity * (val - mid))), 1)
+
+            metrics = {
+                "attention":  normalize(attn_r, 1.2, 1.5),
+                "relaxation": normalize(rex_r, 1.5, 1.2),
+                "stress":     normalize(str_r, 1.0, 2.0),
+                "engagement": normalize(eng_r, 0.6, 3.0),
             }
 
-            # Run inference inline so the client receives everything in one event
+            # Response Payload (Flattened for SSE spec)
+            payload = {
+                "epoch_id":  int(self.df.index[idx % total]),
+                "timestamp": int(time.time() * 1000),
+                "subject":   int(row["subject"]),
+                "bands":     {k.replace("_mean", ""): round(v, 4) for k, v in features.items() if "_mean" in k},
+                **metrics,
+                "prediction": None
+            }
+
             if predictor.is_ready:
                 try:
                     payload["prediction"] = predictor.predict(features)
                 except Exception as exc:
-                    logger.error(f"Prediction error at row {idx}: {exc}")
+                    logger.error(f"Prediction error: {exc}")
 
-            event = "data: " + json.dumps(payload) + "\n\n"
-            yield event
+            yield f"event: eeg\ndata: {json.dumps(payload)}\n\n"
 
             idx += 1
             await asyncio.sleep(delay_ms / 1000.0)
