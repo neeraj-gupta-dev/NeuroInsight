@@ -5,49 +5,36 @@ import time
 
 async def stream():
     """
-    BULLETPROOF EEG async generator.
-    Cycles through synthetic EEG data if no real data is loaded.
+    Core streaming generator. 
+    Yields events as dictionaries for EventSourceResponse.
     """
     print("[STREAM] EEG streamer started")
 
-    # 1. Immediate handshake event
+    # 1. Immediate handshake
     yield {
         "event": "connected",
         "data": "ok"
     }
 
-    # 2. Safety delay to allow proxy sync
+    # 2. Delay to prevent race conditions with proxy buffers
     await asyncio.sleep(1)
 
     idx = 0
-    last_heartbeat = time.time()
-
     while True:
         try:
-            now = time.time()
-            
-            # 3. Heartbeat every 15s to prevent Render/Nginx timeout
-            if now - last_heartbeat > 15:
-                yield {
-                    "event": "heartbeat", 
-                    "data": "keep-alive"
-                }
-                print("[STREAM] Heartbeat sent")
-                last_heartbeat = now
-
-            # 4. Generate Packet (Matched to Frontend Schema)
+            # 3. Generate packet exactly as frontend expects
             packet = {
                 "epoch_id":   idx,
-                "timestamp":  int(now * 1000),
+                "timestamp":  int(time.time() * 1000),
                 "attention":  round(random.uniform(40, 90), 2),
                 "stress":     round(random.uniform(10, 60), 2),
                 "relaxation": round(random.uniform(20, 80), 2),
-                "engagement": round(random.uniform(30, 85), 2)
+                "engagement": round(random.uniform(30, 85), 2),
+                "prediction": {"cognitive_state": "Neutral", "confidence": 0.85}
             }
 
-            print(f"[STREAM] Sending EEG packet {idx}")
+            print(f"[STREAM] Sent packet {idx}")
 
-            # 5. Yield Event
             yield {
                 "event": "eeg",
                 "data": json.dumps(packet)
@@ -63,9 +50,22 @@ async def stream():
             print(f"[STREAM ERROR] {str(e)}")
             await asyncio.sleep(1)
 
-# Compatibility wrapper
-class MockStreamer:
+class Streamer:
+    """Singleton to maintain compatibility with main.py lifespan."""
+    def __init__(self):
+        self._ready = False
+
+    def load(self):
+        print("[STREAMER] Simulator loaded")
+        self._ready = True
+        return True
+
+    @property
+    def is_ready(self):
+        return self._ready
+
     def stream(self):
         return stream()
 
-streamer = MockStreamer()
+# Module-level singleton
+streamer = Streamer()
