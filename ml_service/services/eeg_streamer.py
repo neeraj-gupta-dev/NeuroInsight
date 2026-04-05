@@ -1,8 +1,3 @@
-"""
-EEG Data Streamer — reads eeg_features.csv row-by-row.
-Each row is a real EEG epoch from the PhysioNet EEGBCI dataset.
-"""
-
 import os
 import json
 import logging
@@ -46,71 +41,75 @@ class EEGStreamer:
             logger.error(f"[streamer] Load failed: {exc}")
             return False
 
-    async def stream(self, delay_ms: int = 400):
+    async def stream(self, delay_ms: float = 0.4):
         """
-        Async generator — yields one SSE-formatted event string per epoch.
-        Loops the dataset indefinitely.
+        True infinite streaming generator for SSE.
+        Yields events in 'event: <type>\ndata: <json>\n\n' format.
         """
         if not self._loaded:
-            yield "data: " + json.dumps({"error": "Dataset not loaded"}) + "\n\n"
+            yield "event: error\ndata: {\"message\": \"Dataset not loaded\"}\n\n"
             return
 
         from services.predictor import predictor
 
-        # 1. Send immediate handshake
+        # 1. Immediate Handshake
         yield "event: connected\ndata: ok\n\n"
-        print("[STREAM] Client connected — handshake sent")
+        logger.info("[STREAM] Client connected — handshake sent")
 
         idx = 0
         total = len(self.df)
 
-        while True:
-            row = self.df.iloc[idx % total]
-            epoch_id = int(self.df.index[idx % total])
-            features = {f: float(row[f]) for f in self.feature_names}
-            
-            # --- Cognitive Metric Calculation (Normalized 0-100) ---
-            # Features are log10 power. Convert to linear for ratio calculation.
-            p = {k.replace("_mean", ""): 10**v for k, v in features.items() if "_mean" in k}
-            
-            # Ratios
-            attn_r = p["beta"] / p["theta"] if p["theta"] > 0 else 1.0
-            rex_r  = p["alpha"] / p["beta"] if p["beta"] > 0 else 1.0
-            str_r  = p["beta"] / p["alpha"] if p["alpha"] > 0 else 1.0
-            eng_r  = p["beta"] / (p["alpha"] + p["theta"]) if (p["alpha"] + p["theta"]) > 0 else 1.0
+        try:
+            while True:
+                row = self.df.iloc[idx % total]
+                epoch_id = int(self.df.index[idx % total])
+                features = {f: float(row[f]) for f in self.feature_names}
+                
+                # --- Cognitive Metric Calculation (Normalized 0-100) ---
+                p = {k.replace("_mean", ""): 10**v for k, v in features.items() if "_mean" in k}
+                
+                # Ratios
+                attn_r = p["beta"] / p["theta"] if p["theta"] > 0 else 1.0
+                rex_r  = p["alpha"] / p["beta"] if p["beta"] > 0 else 1.0
+                str_r  = p["beta"] / p["alpha"] if p["alpha"] > 0 else 1.0
+                eng_r  = p["beta"] / (p["alpha"] + p["theta"]) if (p["alpha"] + p["theta"]) > 0 else 1.0
 
-            # Normalization (0-100) - Sigmoid-like mapping for "natural" feel
-            def normalize(val, mid, sensitivity=2.0):
-                return round(100 / (1 + np.exp(-sensitivity * (val - mid))), 1)
+                # Normalization (0-100)
+                def normalize(val, mid, sensitivity=2.0):
+                    return round(100 / (1 + np.exp(-sensitivity * (val - mid))), 1)
 
-            metrics = {
-                "attention":  normalize(attn_r, 1.2, 1.5),
-                "relaxation": normalize(rex_r, 1.5, 1.2),
-                "stress":     normalize(str_r, 1.0, 2.0),
-                "engagement": normalize(eng_r, 0.6, 3.0),
-            }
+                metrics = {
+                    "attention":  normalize(attn_r, 1.2, 1.5),
+                    "relaxation": normalize(rex_r, 1.5, 1.2),
+                    "stress":     normalize(str_r, 1.0, 2.0),
+                    "engagement": normalize(eng_r, 0.6, 3.0),
+                }
 
-            # Response Payload (Flattened for SSE spec)
-            payload = {
-                "epoch_id":  epoch_id,
-                "timestamp": int(time.time() * 1000),
-                "subject":   int(row["subject"]),
-                "bands":     {k.replace("_mean", ""): round(v, 4) for k, v in features.items() if "_mean" in k},
-                **metrics,
-                "prediction": None
-            }
+                # Response Payload
+                payload = {
+                    "epoch_id":  epoch_id,
+                    "timestamp": int(time.time() * 1000),
+                    "subject":   int(row["subject"]),
+                    "bands":     {k.replace("_mean", ""): round(v, 4) for k, v in features.items() if "_mean" in k},
+                    **metrics,
+                    "prediction": None
+                }
 
-            if predictor.is_ready:
-                try:
-                    payload["prediction"] = predictor.predict(features)
-                except Exception as exc:
-                    logger.error(f"Prediction error: {exc}")
+                if predictor.is_ready:
+                    try:
+                        payload["prediction"] = predictor.predict(features)
+                    except Exception as e:
+                        logger.error(f"[STREAM] Predict error: {e}")
 
-            yield f"event: eeg\ndata: {json.dumps(payload)}\n\n"
-            print(f"[STREAM] Sending EEG packet {epoch_id}")
+                # Format as SSE event
+                yield f"event: eeg\ndata: {json.dumps(payload)}\n\n"
+                logger.info(f"[STREAM] Sending EEG packet {idx}")
 
-            idx += 1
-            await asyncio.sleep(0.4) # Fixed 400ms delay per requirements
+                idx += 1
+                await asyncio.sleep(delay_ms)
+        except asyncio.CancelledError:
+            logger.info("[STREAM] Client disconnected — stopping stream")
+            raise
 
     @property
     def is_ready(self) -> bool:

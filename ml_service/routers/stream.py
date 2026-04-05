@@ -1,10 +1,3 @@
-"""
-SSE Streaming Router — GET /stream-eeg
-
-Streams real EEG epoch data from the PhysioNet EEGBCI dataset,
-row by row, with inline RandomForest + SHAP predictions.
-"""
-
 import os
 from fastapi import APIRouter
 from sse_starlette.sse import EventSourceResponse
@@ -17,6 +10,7 @@ router = APIRouter()
 @router.get("/stream-eeg")
 async def stream_eeg():
     """
-    Server-Sent Events stream of real EEG epochs with predictions.
+    True SSE streaming endpoint using sse-starlette.
+    Returns an infinite generator that cycles EEG dataset every 0.4s.
     """
     return EventSourceResponse(streamer.stream())
