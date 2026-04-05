@@ -53,7 +53,7 @@ app.add_middleware(
 )
 
 # ── Routers ───────────────────────────────────────────────────────────────────
-app.include_router(stream_router, prefix="/api/eeg", tags=["EEG Stream"])
+app.include_router(stream_router, tags=["EEG Stream"])
 app.include_router(predict.router, tags=["Prediction"])
 
 
