@@ -33,7 +33,7 @@ async def stream():
                 "prediction": {"cognitive_state": "Neutral", "confidence": 0.85}
             }
 
-            print(f"[STREAM] Sent packet {idx}")
+            # print(f"[STREAM] Sent packet {idx}") # Disabled for production clarity
 
             yield {
                 "event": "eeg",
