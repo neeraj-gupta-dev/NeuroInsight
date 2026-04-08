@@ -35,6 +35,9 @@ async def eeg_stream(request: Request):
         active_connections.add(client_ip)
         logger.info(f"[ML STREAM] Connection established for {client_ip}. Total active: {len(active_connections)}")
         
+        # 1. Immediate heartbeat to prevent Render from closing connection during cold-start
+        yield "event: heartbeat\ndata: ping\n\n"
+
         # Core streaming generator
         stream_gen = stream()
         last_heartbeat = time.time()
@@ -44,14 +47,17 @@ async def eeg_stream(request: Request):
                 if await request.is_disconnected():
                     break
 
-                # 15s Heartbeat to bypass proxy timeouts
-                if time.time() - last_heartbeat > 15:
-                    yield ": heartbeat ping\n\n"
+                # 2. Frequent 5s heartbeat to bypass Render 10s idle timeout
+                if time.time() - last_heartbeat > 5:
+                    yield "event: heartbeat\ndata: ping\n\n"
                     last_heartbeat = time.time()
 
                 try:
+                    # Short timeout to keep loop responsive to heartbeat cycle
                     event = await asyncio.wait_for(anext(stream_gen), timeout=1.0)
                     yield f"event: {event.get('event', 'message')}\ndata: {event.get('data', '')}\n\n"
+                    # Reset heartbeat timer on actual data transmission
+                    last_heartbeat = time.time()
                 except asyncio.TimeoutError:
                     continue
                 except StopAsyncIteration:
@@ -71,6 +77,7 @@ async def eeg_stream(request: Request):
             "Cache-Control":      "no-cache, no-transform",
             "Connection":         "keep-alive",
             "X-Accel-Buffering":  "no",
+            "X-Content-Type-Options": "nosniff",
             "Transfer-Encoding":  "chunked"
         }
     )
