@@ -18,8 +18,9 @@ const app  = express();
 const PORT = process.env.PORT || 5000;
 
 // ── Validation ─────────────────────────────────────────────────────────────
-if (!process.env.ML_SERVICE_URL) {
-  console.error("\n❌ FATAL: ML_SERVICE_URL is not set.\n");
+if (!process.env.EEG_STREAM_URL && !process.env.ML_SERVICE_URL) {
+  console.error("\n[FATAL] System configuration error: No EEG telemetry upstream configured.");
+  console.error("Please set either EEG_STREAM_URL (Full URL) or ML_SERVICE_URL (Base Service).\n");
   process.exit(1);
 }
 

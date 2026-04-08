@@ -10,11 +10,11 @@ const STATE_COLORS = {
 };
 
 const STATE_ICONS = {
-  Focused:    "🎯",
-  Relaxed:    "🌿",
-  Stressed:   "⚡",
-  Distracted: "💫",
-  Drowsy:     "🌙",
+  Focused:    "",
+  Relaxed:    "",
+  Stressed:   "",
+  Distracted: "",
+  Drowsy:     "",
 };
 
 export default function SessionHistory({ sessions, loading, pagination, onPageChange }) {
@@ -26,14 +26,15 @@ export default function SessionHistory({ sessions, loading, pagination, onPageCh
     );
   }
 
-  // BUG 3 Fix: Handle empty sessions state before rendering table
   if (!sessions || sessions.length === 0) {
     return (
       <div className="glass-card p-12 flex flex-col items-center gap-3">
-        <span className="text-5xl">📭</span>
-        <p className="text-base font-medium" style={{ color: "#E8F4FF" }}>No sessions yet</p>
-        <p className="text-sm" style={{ color: "#6B8BAE" }}>
-          Start the EEG simulation on the Dashboard to record sessions.
+        <div className="w-12 h-12 bg-white/5 rounded-xl border border-white/10 mb-2 flex items-center justify-center">
+          <div className="w-4 h-4 border border-slate-700 rounded-sm" />
+        </div>
+        <p className="text-base font-bold uppercase tracking-widest" style={{ color: "#E8F4FF" }}>No records identified</p>
+        <p className="text-[10px] font-bold uppercase tracking-[0.2em]" style={{ color: "#6B8BAE" }}>
+          Initiate telemetry collection to populate database.
         </p>
       </div>
     );
@@ -83,7 +84,6 @@ export default function SessionHistory({ sessions, loading, pagination, onPageCh
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
-                       <span>{STATE_ICONS[s.cognitiveState] || "🧠"}</span>
                        <span className="font-semibold" style={{ color }}>
                         {s.cognitiveState}
                       </span>

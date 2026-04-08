@@ -218,9 +218,34 @@ export function EEGStreamProvider({ children }) {
         }
       });
 
+      es.addEventListener("fatal", (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          console.error("[Telemetry] FATAL ERROR: Permanent upstream failure.", data);
+          setError(`Configuration Error: ${data.error || "Upstream service mismatch"}`);
+        } catch (err) {
+          console.error("[Telemetry] FATAL ERROR received.", event.data);
+          setError("Upstream service configuration mismatch.");
+        }
+        
+        // Terminal failure: inhibit reconnection
+        intentRef.current = false;
+        setStatus(StreamStatus.ERROR);
+        setStreaming(false);
+        clearWatchdog();
+        
+        if (esRef.current) {
+          esRef.current.close();
+          esRef.current = null;
+        }
+      });
+
       es.onerror = (event) => {
-        console.error("[Telemetry] Signal interruption detected.", event);
-        handleReconnect();
+        // Only attempt reconnect if it wasn't a fatal terminal event
+        if (intentRef.current) {
+          console.error("[Telemetry] Signal interruption detected. Attempting recovery...");
+          handleReconnect();
+        }
       };
     } catch (err) {
       console.error("[Telemetry] Initialization failed:", err);

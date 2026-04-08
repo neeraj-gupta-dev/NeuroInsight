@@ -16,19 +16,17 @@ const ML_URL = () => process.env.ML_SERVICE_URL;
 
 // ── GET /api/eeg/stream ────────────────────────────────────────────────────
 router.get("/stream", protect, (req, res) => {
-  // 0. Primary URL derivation for diagnostics
+  // 0. Primary URL derivation for production-grade routing
   const baseML = process.env.ML_SERVICE_URL;
   const fullStream = process.env.EEG_STREAM_URL;
   
-  // Choose the target URL (prioritize full stream URL if provided)
-  const EEG_SOURCE_URL = fullStream || (baseML ? `${baseML}/stream-eeg` : null);
+  // URL Resolution Priority:
+  // 1. EEG_STREAM_URL (Full URL override)
+  // 2. ML_SERVICE_URL/api/eeg/stream (Synchronized path)
+  const EEG_SOURCE_URL = fullStream || (baseML ? `${baseML}/api/eeg/stream` : null);
 
   if (!EEG_SOURCE_URL) {
-    console.error("[SSE Proxy] ERROR: No upstream URL configured (EEG_STREAM_URL or ML_SERVICE_URL).");
-    res.status(503).json({ 
-      message: "Telemetry service endpoint not configured.",
-      diag: "Verify EEG_STREAM_URL in environment settings." 
-    });
+    res.status(503).json({ message: "Telemetry upstream not configured." });
     return;
   }
 
@@ -44,7 +42,7 @@ router.get("/stream", protect, (req, res) => {
   if (req.socket) req.socket.setTimeout(0);
   if (res.socket) res.socket.setTimeout(0);
 
-  // 3. Initiate connection handshake and retry intervals
+  // 3. Initiate connection handshake
   res.write("retry: 5000\n");
   res.write(`event: connected\ndata: ${JSON.stringify({ status: "connected", timestamp: Date.now() })}\n\n`);
 
@@ -54,28 +52,24 @@ router.get("/stream", protect, (req, res) => {
       res.write("event: heartbeat\ndata: ping\n\n");
       if (typeof res.flush === "function") res.flush();
     } catch (error) {
-      console.error("[SSE] Heartbeat write failure:", error.message);
+      console.error("[SSE] Heartbeat failure:", error.message);
     }
   }, 15000);
 
   let clientDisconnected = false;
   let upstreamRequest    = null;
 
-  // 5. Cleanup on client/browser disconnect
+  // 5. Cleanup on browser session termination
   req.on("close", () => {
     clientDisconnected = true;
-    console.log("[SSE Proxy] Browser session terminated.");
     clearInterval(heartbeatInterval);
     if (upstreamRequest) {
       try { upstreamRequest.destroy(); } catch (_) {}
     }
   });
 
-  // 5b. Log network errors on the client side
-  req.on("error", (err) => console.error("[SSE Proxy] Client session request error:", err));
-
   // 6. Establish upstream connection to neural processing service
-  console.log("EEG upstream URL:", EEG_SOURCE_URL);
+  console.log(`[SSE Proxy] Connecting to upstream: ${EEG_SOURCE_URL}`);
   
   const target = new URL(EEG_SOURCE_URL);
   const protocol = target.protocol === "https:" ? https : http;
@@ -95,17 +89,15 @@ router.get("/stream", protect, (req, res) => {
       },
     },
     (upstream) => {
-      console.log("Upstream status:", upstream.statusCode);
-      
-      if (upstream.statusCode !== 200) {
-        console.error(`[SSE Upstream] CRITICAL: HTTP ${upstream.statusCode} returned from ${EEG_SOURCE_URL}`);
-        console.error("[SSE Upstream] Response Headers:", JSON.stringify(upstream.headers));
+      // 6a. Permanent Failure Handling (4xx) - Stop reconnection storm
+      if (upstream.statusCode >= 400 && upstream.statusCode < 500) {
+        console.error(`[SSE Proxy] Fatal upstream error: HTTP ${upstream.statusCode} on ${EEG_SOURCE_URL}`);
         
         if (!clientDisconnected) {
           try {
-            res.write(`event: error\ndata: ${JSON.stringify({ 
-              error: "Upstream connection failed", 
-              code: upstream.statusCode,
+            res.write(`event: fatal\ndata: ${JSON.stringify({ 
+              error: "Telemetry endpoint misconfiguration", 
+              status: upstream.statusCode,
               url: EEG_SOURCE_URL 
             })}\n\n`);
             res.end();
@@ -115,6 +107,21 @@ router.get("/stream", protect, (req, res) => {
         return;
       }
 
+      // 6b. Transient Failure Handling (5xx or other)
+      if (upstream.statusCode !== 200) {
+        console.warn(`[SSE Proxy] Transient upstream error: HTTP ${upstream.statusCode}`);
+        if (!clientDisconnected) {
+          try {
+            res.write(`event: error\ndata: ${JSON.stringify({ error: "Upstream busy or unavailable" })}\n\n`);
+            res.end();
+          } catch (_) {}
+        }
+        clearInterval(heartbeatInterval);
+        return;
+      }
+
+      console.log("[SSE Proxy] Synchronized with upstream telemetry.");
+
       // Proxy data chunks immediately to client
       upstream.on("data", (chunk) => {
         if (clientDisconnected) return;
@@ -122,12 +129,12 @@ router.get("/stream", protect, (req, res) => {
           res.write(chunk);
           if (typeof res.flush === "function") res.flush();
         } catch (error) {
-          console.error("[SSE Proxy] Proxy write failure:", error.message);
+          console.error("[SSE Proxy] Client write failure:", error.message);
         }
       });
 
       upstream.on("end", () => {
-        console.log("[SSE Upstream] Connection ended by remote service.");
+        console.log("[SSE Proxy] Upstream connection closed.");
         clearInterval(heartbeatInterval);
         if (!clientDisconnected) {
           try { res.end(); } catch (_) {}
@@ -135,14 +142,11 @@ router.get("/stream", protect, (req, res) => {
       });
 
       upstream.on("error", (error) => {
-        console.error("[SSE Upstream] Data stream error:", error.message);
+        console.error("[SSE Proxy] Stream processing error:", error.message);
         clearInterval(heartbeatInterval);
         if (!clientDisconnected) {
           try {
-            res.write(`event: error\ndata: ${JSON.stringify({ 
-              error: "Signal processing interrupted",
-              url: EEG_SOURCE_URL
-            })}\n\n`);
+            res.write(`event: error\ndata: ${JSON.stringify({ error: "Signal processing interrupted" })}\n\n`);
             res.end();
           } catch (_) {}
         }
@@ -151,21 +155,16 @@ router.get("/stream", protect, (req, res) => {
   );
 
   upstreamRequest.on("error", (error) => {
-    console.error("Upstream req error:", error.message);
-    console.error("[SSE Connection] Target URL was:", EEG_SOURCE_URL);
+    console.error("[SSE Proxy] Upstream connection failure:", error.message);
     clearInterval(heartbeatInterval);
     if (!clientDisconnected) {
       try {
-        res.write(`event: error\ndata: ${JSON.stringify({ 
-          error: "Processing service unavailable",
-          url: EEG_SOURCE_URL
-        })}\n\n`);
+        res.write(`event: error\ndata: ${JSON.stringify({ error: "Upstream service unreachable" })}\n\n`);
         res.end();
       } catch (_) {}
     }
   });
 
-  // 7. Enforce no-timeout for upstream socket
   upstreamRequest.setTimeout(0);
   upstreamRequest.end();
 });

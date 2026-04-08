@@ -52,12 +52,12 @@ export default function History() {
 
           <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-10">
             <div>
-              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-cyan-500 mb-2">Session Analytics</p>
+              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-cyan-500 mb-2">Cerebral Diagnostic Analytics</p>
               <h1 className="text-3xl font-display font-bold text-white">
                 {new Date(s.startTime).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
               </h1>
               <p className="text-sm text-slate-400 mt-1">
-                Started at {new Date(s.startTime).toLocaleTimeString()} • Duration: {s.duration}s
+                Initiated at {new Date(s.startTime).toLocaleTimeString()} • Duration: {s.duration}s
               </p>
             </div>
             
@@ -65,14 +65,13 @@ export default function History() {
               <button
                 onClick={handleDownload}
                 disabled={generating}
-                className="px-6 py-3 rounded-2xl bg-cyan-500 text-slate-900 text-xs font-bold uppercase tracking-widest hover:bg-cyan-400 disabled:opacity-50 transition-all flex items-center gap-2"
+                className="px-6 py-3 rounded-2xl bg-cyan-500 text-slate-900 text-xs font-black uppercase tracking-[0.2em] hover:bg-cyan-400 disabled:opacity-50 transition-all flex items-center gap-2"
               >
-                {generating ? "Generating..." : "Download Brain Report (PDF)"}
-                {!generating && <span className="text-lg">📄</span>}
+                {generating ? "PREPARING..." : "EXPORT NEURAL ANALYTICS (PDF)"}
               </button>
 
               <div className="bg-white/5 rounded-2xl px-6 py-3 border border-white/10">
-                <p className="text-[10px] font-bold text-slate-500 uppercase mb-1">Session ID</p>
+                <p className="text-[10px] font-bold text-slate-500 uppercase mb-1">RECORD ID</p>
                 <p className="text-xs font-mono text-slate-300">{s.id}</p>
               </div>
             </div>
@@ -80,17 +79,17 @@ export default function History() {
 
           {/* Aggregate Stats Grid */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-            <StatCard label="Avg Attention" value={s.averages.attention} color="#00D4FF" icon="🎯" />
-            <StatCard label="Avg Relaxation" value={s.averages.relaxation} color="#00FF88" icon="🌿" />
-            <StatCard label="Avg Stress" value={s.averages.stress} color="#FF3366" icon="⚡" />
-            <StatCard label="Peak Engagement" value={s.peaks.maxEngagement} color="#7B2FBE" icon="🏗️" />
+            <StatCard label="Mean Attention" value={s.averages.attention} color="#00D4FF" icon="" />
+            <StatCard label="Mean Relaxation" value={s.averages.relaxation} color="#00FF88" icon="" />
+            <StatCard label="Mean Stress" value={s.averages.stress} color="#FF3366" icon="" />
+            <StatCard label="Peak Engagement" value={s.peaks.maxEngagement} color="#7B2FBE" icon="" />
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <PerformanceChart 
               id="performance-chart-1"
               buffer={s.snapshots} 
-              title="Focus vs Calm" 
+              title="Cerebral Load Balance" 
               subtitle="Attention & Relaxation trends"
               metrics={[
                 { key: "attention",  color: "#00D4FF", label: "Attention" },
@@ -100,7 +99,7 @@ export default function History() {
             <PerformanceChart 
               id="performance-chart-2"
               buffer={s.snapshots} 
-              title="Mental Load" 
+              title="Psychological Stress Response" 
               subtitle="Stress & Engagement trends"
               metrics={[
                 { key: "stress",     color: "#FF3366", label: "Stress" },
@@ -120,26 +119,26 @@ export default function History() {
       <div className="max-w-7xl mx-auto px-6 py-8">
         <div className="flex items-center justify-between mb-10">
           <div>
-            <h1 className="text-3xl font-display font-bold text-white">Brain Histories</h1>
-            <p className="text-sm text-slate-400 mt-1">Your localized session archive ({sessions.length}/50)</p>
+            <h1 className="text-3xl font-display font-bold text-white uppercase tracking-tight">Cerebral Archives</h1>
+            <p className="text-sm text-slate-400 mt-1 uppercase tracking-widest text-[10px] font-bold">Research Record Cache ({sessions.length}/50)</p>
           </div>
           {sessions.length > 0 && (
             <button 
               onClick={clearHistory}
-              className="px-4 py-2 text-xs font-bold text-red-400 hover:bg-red-500/10 rounded-xl transition-all"
+              className="px-4 py-2 text-[10px] font-black uppercase tracking-[0.2em] text-red-400 hover:bg-red-500/10 rounded-xl transition-all"
             >
-              Clear Archive
+              PURGE ARCHIVE
             </button>
           )}
         </div>
 
         {sessions.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 border-2 border-dashed border-white/5 rounded-3xl">
-            <div className="w-16 h-16 bg-white/5 rounded-full flex items-center justify-center mb-4">
-              <span className="text-3xl">🧠</span>
+          <div className="flex flex-col items-center justify-center py-24 border-2 border-dashed border-white/5 rounded-3xl bg-white/[0.01]">
+            <div className="w-16 h-16 bg-white/5 rounded-2xl flex items-center justify-center mb-6 border border-white/10">
+              <div className="w-6 h-6 border-2 border-slate-700 rounded-lg animate-pulse" />
             </div>
-            <h3 className="text-xl font-bold text-white mb-2">No brain sessions yet</h3>
-            <p className="text-sm text-slate-500">Your completed simulations will appear here.</p>
+            <h3 className="text-lg font-bold text-white mb-2 uppercase tracking-widest">No Records Detected</h3>
+            <p className="text-[10px] text-slate-500 uppercase tracking-[0.2em] font-bold">Completed session telemetry will be archived here.</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
