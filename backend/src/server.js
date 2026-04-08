@@ -69,10 +69,16 @@ app.use((err, _req, res, _next) => {
 });
 
 // ── Listen ─────────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`\n[NeuroInsight Backend] listening on port ${PORT}`);
-  console.log(`  ML Service → ${process.env.ML_SERVICE_URL}`);
-  console.log(`  MongoDB    → ${process.env.MONGO_URI?.replace(/\/\/.*@/, "//***@") || "see .env"}\n`);
+const server = app.listen(PORT, () => {
+  console.log(`\n[NeuroInsight] Server initialized on port ${PORT}`);
+  console.log(`  ML Service Pipeline → ${process.env.ML_SERVICE_URL}`);
 });
+
+/**
+ * Render Proxy Hardening
+ * Prevents premature socket closure by the reverse proxy.
+ */
+server.keepAliveTimeout = 65000;
+server.headersTimeout   = 66000;
 
 module.exports = app;

@@ -18,58 +18,58 @@ const ML_URL = () => process.env.ML_SERVICE_URL;
 router.get("/stream", protect, (req, res) => {
   const mlUrl = ML_URL();
   if (!mlUrl) {
-    res.writeHead(200, { "Content-Type": "text/event-stream" });
-    res.write("event: error\ndata: ML_SERVICE_URL not configured\n\n");
-    return res.end();
+    res.status(503).json({ message: "Telemetry service endpoint not configured." });
+    return;
   }
 
-  // ── 1. SSE response headers — exact set required for Render+Vercel chain ─
-  res.setHeader("Content-Type",               "text/event-stream");
-  res.setHeader("Cache-Control",              "no-cache, no-transform");
-  res.setHeader("Connection",                 "keep-alive");
-  res.setHeader("X-Accel-Buffering",          "no");   // disables Nginx buffering
-  res.setHeader("X-Content-Type-Options",     "nosniff");
-  res.setHeader("Transfer-Encoding",          "chunked");
-  res.flushHeaders(); // CRITICAL: send headers NOW before any async work
+  // 1. Establish SSE session headers
+  res.setHeader("Content-Type",           "text/event-stream");
+  res.setHeader("Cache-Control",          "no-cache");
+  res.setHeader("Connection",             "keep-alive");
+  res.setHeader("X-Accel-Buffering",      "no"); // Disables Nginx buffering for low-latency streaming
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.flushHeaders();
 
-  // ── 2. Disable socket-level timeouts ──────────────────────────────────────
+  // 2. Configure socket behavior
   if (req.socket) req.socket.setTimeout(0);
   if (res.socket) res.socket.setTimeout(0);
 
-  // ── 3. Send immediate "connected" event so Vercel/Render don't timeout ────
-  res.write("event: connected\ndata: ok\n\n");
-  if (typeof res.flush === "function") res.flush();
+  // 3. Initiate connection handshake and retry intervals
+  res.write("retry: 5000\n");
+  res.write(`event: connected\ndata: ${JSON.stringify({ status: "connected", timestamp: Date.now() })}\n\n`);
 
-  // ── 4. Heartbeat (every 20s) — keeps the connection alive through proxies ─
-  const heartbeat = setInterval(() => {
+  // 4. Session Heartbeat (15s) - Maintains channel integrity through proxy layers
+  const heartbeatInterval = setInterval(() => {
     try {
-      res.write(":\n\n"); // SSE comment — invisible to client JS, keeps TCP alive
+      res.write("event: heartbeat\ndata: ping\n\n");
       if (typeof res.flush === "function") res.flush();
-    } catch (_) {}
-  }, 20000);
+    } catch (error) {
+      console.error("[SSE] Heartbeat failure:", error.message);
+    }
+  }, 15000);
 
-  // ── 5. Client disconnect tracking ─────────────────────────────────────────
-  let clientGone  = false;
-  let upstreamReq = null;
+  let clientDisconnected = false;
+  let upstreamRequest    = null;
 
+  // 5. Cleanup on client disconnect
   req.on("close", () => {
-    clientGone = true;
-    clearInterval(heartbeat);
-    if (upstreamReq) {
-      try { upstreamReq.destroy(); } catch (_) {}
+    clientDisconnected = true;
+    clearInterval(heartbeatInterval);
+    if (upstreamRequest) {
+      try { upstreamRequest.destroy(); } catch (_) {}
     }
   });
 
-  // ── 6. Open upstream connection to FastAPI ML service ─────────────────────
+  // 6. Establish upstream connection to neural processing cluster
   const target = new URL(`${mlUrl}/stream-eeg`);
+  const protocol = target.protocol === "https:" ? https : http;
 
-  upstreamReq = lib.request(
+  upstreamRequest = protocol.request(
     {
       hostname: target.hostname,
       port:     target.port || (target.protocol === "https:" ? 443 : 80),
       path:     target.pathname + target.search,
       method:   "GET",
-      // Disable Node's internal response buffering for this socket
       agent:    false,
       headers: {
         "Accept":           "text/event-stream",
@@ -79,45 +79,42 @@ router.get("/stream", protect, (req, res) => {
       },
     },
     (upstream) => {
-      // ── Non-200 response from ML service ──────────────────────────────────
       if (upstream.statusCode !== 200) {
-        console.error(`[SSE PROXY] ML service returned HTTP ${upstream.statusCode}`);
-        if (!clientGone) {
+        console.error(`[SSE Upstream] HTTP Error ${upstream.statusCode}`);
+        if (!clientDisconnected) {
           try {
-            res.write(`event: error\ndata: ML_STREAM_FAILED (${upstream.statusCode})\n\n`);
-            if (typeof res.flush === "function") res.flush();
+            res.write(`event: error\ndata: ${JSON.stringify({ error: "Upstream connection failed", code: upstream.statusCode })}\n\n`);
             res.end();
           } catch (_) {}
         }
-        clearInterval(heartbeat);
+        clearInterval(heartbeatInterval);
         return;
       }
 
-      // ── Pipe every chunk from ML → browser immediately ────────────────────
+      // Stream neural data chunks to client
       upstream.on("data", (chunk) => {
-        if (clientGone) return;
+        if (clientDisconnected) return;
         try {
           res.write(chunk);
           if (typeof res.flush === "function") res.flush();
-        } catch (err) {
-          console.error("[SSE PROXY] res.write failed:", err.message);
+        } catch (error) {
+          console.error("[SSE Stream] Write failure:", error.message);
         }
       });
 
       upstream.on("end", () => {
-        clearInterval(heartbeat);
-        if (!clientGone) {
+        clearInterval(heartbeatInterval);
+        if (!clientDisconnected) {
           try { res.end(); } catch (_) {}
         }
       });
 
-      upstream.on("error", (err) => {
-        console.error("[SSE PROXY] Upstream stream error:", err.message);
-        clearInterval(heartbeat);
-        if (!clientGone) {
+      upstream.on("error", (error) => {
+        console.error("[SSE Upstream] Data error:", error.message);
+        clearInterval(heartbeatInterval);
+        if (!clientDisconnected) {
           try {
-            res.write(`event: error\ndata: ML_STREAM_FAILED\n\n`);
-            if (typeof res.flush === "function") res.flush();
+            res.write(`event: error\ndata: ${JSON.stringify({ error: "Signal processing interrupted" })}\n\n`);
             res.end();
           } catch (_) {}
         }
@@ -125,21 +122,20 @@ router.get("/stream", protect, (req, res) => {
     }
   );
 
-  upstreamReq.on("error", (err) => {
-    console.error("[SSE PROXY] Cannot connect to ML service:", err.message);
-    clearInterval(heartbeat);
-    if (!clientGone) {
+  upstreamRequest.on("error", (error) => {
+    console.error("[SSE Connection] Failed to contact processing service:", error.message);
+    clearInterval(heartbeatInterval);
+    if (!clientDisconnected) {
       try {
-        res.write(`event: error\ndata: ML_SERVICE_UNAVAILABLE\n\n`);
-        if (typeof res.flush === "function") res.flush();
+        res.write(`event: error\ndata: ${JSON.stringify({ error: "Processing service unavailable" })}\n\n`);
         res.end();
       } catch (_) {}
     }
   });
 
-  // ── 7. Disable upstream socket timeout ────────────────────────────────────
-  upstreamReq.setTimeout(0);
-  upstreamReq.end();
+  // 7. Enforce no-timeout for upstream socket
+  upstreamRequest.setTimeout(0);
+  upstreamRequest.end();
 });
 
 // ── POST /api/eeg/predict ──────────────────────────────────────────────────
