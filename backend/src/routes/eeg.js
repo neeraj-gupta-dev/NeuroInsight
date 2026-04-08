@@ -11,6 +11,13 @@ const https   = require("https");
 const express = require("express");
 const { protect } = require("../middleware/authMiddleware");
 
+// ── Persistent Keep-Alive Agents ─────────────────────────────────────────────
+// CRITICAL: We MUST use persistent agents to prevent Node.js from closing
+// upstream TCP connections during idle telemetry periods (e.g., between epochs).
+// Without this, the proxy fails behind Render/Cloudflare/Nginx.
+const httpAgent  = new http.Agent({ keepAlive: true, keepAliveMsecs: 10000 });
+const httpsAgent = new https.Agent({ keepAlive: true, keepAliveMsecs: 10000 });
+
 const router = express.Router();
 const ML_URL = () => process.env.ML_SERVICE_URL;
 
@@ -20,9 +27,6 @@ router.get("/stream", protect, (req, res) => {
   const baseML = process.env.ML_SERVICE_URL;
   const fullStream = process.env.EEG_STREAM_URL;
   
-  // URL Resolution Priority:
-  // 1. EEG_STREAM_URL (Full URL override)
-  // 2. ML_SERVICE_URL/api/eeg/stream (Synchronized path)
   const EEG_SOURCE_URL = fullStream || (baseML ? `${baseML}/api/eeg/stream` : null);
 
   if (!EEG_SOURCE_URL) {
@@ -32,13 +36,13 @@ router.get("/stream", protect, (req, res) => {
 
   // 1. Establish SSE session headers
   res.setHeader("Content-Type",           "text/event-stream");
-  res.setHeader("Cache-Control",          "no-cache");
+  res.setHeader("Cache-Control",          "no-cache, no-transform");
   res.setHeader("Connection",             "keep-alive");
   res.setHeader("X-Accel-Buffering",      "no");
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.flushHeaders();
 
-  // 2. Configure socket behavior
+  // 2. Configure socket behavior - Disable all timeouts for the listener
   if (req.socket) req.socket.setTimeout(0);
   if (res.socket) res.socket.setTimeout(0);
 
@@ -46,7 +50,7 @@ router.get("/stream", protect, (req, res) => {
   res.write("retry: 5000\n");
   res.write(`event: connected\ndata: ${JSON.stringify({ status: "connected", timestamp: Date.now() })}\n\n`);
 
-  // 4. Session Heartbeat (15s)
+  // 4. Session Heartbeat (15s) - Keeps the browser-to-proxy pipe open
   const heartbeatInterval = setInterval(() => {
     try {
       res.write("event: heartbeat\ndata: ping\n\n");
@@ -73,14 +77,17 @@ router.get("/stream", protect, (req, res) => {
   
   const target = new URL(EEG_SOURCE_URL);
   const protocol = target.protocol === "https:" ? https : http;
+  const currentAgent = target.protocol === "https:" ? httpsAgent : httpAgent;
 
+  // 7. Configure Upstream Request with Persistent Agent
   upstreamRequest = protocol.request(
     {
       hostname: target.hostname,
       port:     target.port || (target.protocol === "https:" ? 443 : 80),
       path:     target.pathname + target.search,
       method:   "GET",
-      agent:    false,
+      // CRITICAL: Must use keep-alive agent to maintain the TCP pipe
+      agent:    currentAgent, 
       headers: {
         "Accept":           "text/event-stream",
         "Cache-Control":    "no-cache",
@@ -89,16 +96,14 @@ router.get("/stream", protect, (req, res) => {
       },
     },
     (upstream) => {
-      // 6a. Permanent Failure Handling (4xx) - Stop reconnection storm
+      // 6a. Permanent Failure Handling (4xx) 
       if (upstream.statusCode >= 400 && upstream.statusCode < 500) {
-        console.error(`[SSE Proxy] Fatal upstream error: HTTP ${upstream.statusCode} on ${EEG_SOURCE_URL}`);
-        
+        console.error(`[SSE Proxy] Fatal upstream error: HTTP ${upstream.statusCode}`);
         if (!clientDisconnected) {
           try {
             res.write(`event: fatal\ndata: ${JSON.stringify({ 
               error: "Telemetry endpoint misconfiguration", 
-              status: upstream.statusCode,
-              url: EEG_SOURCE_URL 
+              status: upstream.statusCode 
             })}\n\n`);
             res.end();
           } catch (_) {}
@@ -112,7 +117,7 @@ router.get("/stream", protect, (req, res) => {
         console.warn(`[SSE Proxy] Transient upstream error: HTTP ${upstream.statusCode}`);
         if (!clientDisconnected) {
           try {
-            res.write(`event: error\ndata: ${JSON.stringify({ error: "Upstream busy or unavailable" })}\n\n`);
+            res.write(`event: error\ndata: ${JSON.stringify({ error: "Upstream busy" })}\n\n`);
             res.end();
           } catch (_) {}
         }
@@ -120,16 +125,17 @@ router.get("/stream", protect, (req, res) => {
         return;
       }
 
-      console.log("[SSE Proxy] Synchronized with upstream telemetry.");
+      console.log("[SSE Proxy] Synchronized with upstream telemetry via persistent agent.");
 
-      // Proxy data chunks immediately to client
+      // 8. RAW PASSTHROUGH - Zero Buffering
       upstream.on("data", (chunk) => {
         if (clientDisconnected) return;
         try {
+          // Write raw chunk directly to the response buffer
           res.write(chunk);
           if (typeof res.flush === "function") res.flush();
         } catch (error) {
-          console.error("[SSE Proxy] Client write failure:", error.message);
+          console.error("[SSE Proxy] Passthrough write failure:", error.message);
         }
       });
 
@@ -159,12 +165,13 @@ router.get("/stream", protect, (req, res) => {
     clearInterval(heartbeatInterval);
     if (!clientDisconnected) {
       try {
-        res.write(`event: error\ndata: ${JSON.stringify({ error: "Upstream service unreachable" })}\n\n`);
+        res.write(`event: error\ndata: ${JSON.stringify({ error: "Upstream unreachable" })}\n\n`);
         res.end();
       } catch (_) {}
     }
   });
 
+  // DISBALE TIMEOUT for the upstream request socket
   upstreamRequest.setTimeout(0);
   upstreamRequest.end();
 });
