@@ -71,7 +71,8 @@ app.use((err, _req, res, _next) => {
 // ── Listen ─────────────────────────────────────────────────────────────────
 const server = app.listen(PORT, () => {
   console.log(`\n[NeuroInsight] Server initialized on port ${PORT}`);
-  console.log(`  ML Service Pipeline → ${process.env.ML_SERVICE_URL}`);
+  console.log(`  ML_SERVICE_URL: ${process.env.ML_SERVICE_URL}`);
+  console.log(`  EEG_STREAM_URL: ${process.env.EEG_STREAM_URL}`);
 });
 
 /**
