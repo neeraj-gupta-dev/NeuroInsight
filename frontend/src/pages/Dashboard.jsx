@@ -7,20 +7,23 @@ import ConfidenceMeter   from "../components/ConfidenceMeter";
 import SHAPChart         from "../components/SHAPChart";
 import MetricsGauge      from "../components/MetricsGauge";
 import PerformanceChart  from "../components/PerformanceChart";
-import { useEEGStream }  from "../hooks/useEEGStream";
+import { useEEGStream, StreamStatus } from "../context/EEGStreamContext";
 
 const STATUS_CONFIG = {
-  idle:        { color: "#6B8BAE", label: "System Idle",  dot: "#6B8BAE" },
-  connecting:  { color: "#FFD700", label: "Syncing...",   dot: "#FFD700" },
-  live:        { color: "#00FF88", label: "Live Stream",  dot: "#00FF88" },
-  error:       { color: "#FF3366", label: "Link Error",   dot: "#FF3366" },
+  [StreamStatus.IDLE]:         { color: "#6B8BAE", label: "System Standby",      dot: "#6B8BAE" },
+  [StreamStatus.CONNECTING]:   { color: "#FFD700", label: "Synchronizing...",    dot: "#FFD700" },
+  [StreamStatus.CONNECTED]:    { color: "#00FF88", label: "Live Telemetry",     dot: "#00FF88" },
+  [StreamStatus.RECONNECTING]: { color: "#FFD700", label: "Reconnecting...",     dot: "#FFD700" },
+  [StreamStatus.DEGRADED]:     { color: "#FFA500", label: "Signal Degraded",     dot: "#FFA500" },
+  [StreamStatus.ERROR]:        { color: "#FF3366", label: "Server Error",        dot: "#FF3366" },
+  [StreamStatus.DISCONNECTED]: { color: "#6B8BAE", label: "Disconnected",      dot: "#6B8BAE" },
 };
 
 export default function Dashboard() {
   const {
     streaming, eegBuffer, prediction, metrics,
-    error, status, connectionStatus, hasReceivedFirstPacket,
-    startStream, stopStream, clearHistory,
+    error, status, hasReceivedFirstPacket,
+    startStream, stopStream, handleClear,
     restoreSession,
   } = useEEGStream();
 
@@ -33,21 +36,21 @@ export default function Dashboard() {
         const data = JSON.parse(saved);
         restoreSession(data);
         setIsRestored(true);
-      } catch (err) { console.error("Restore failed", err); }
+      } catch (err) { /* Silent restore failure */ }
     }
   }, [restoreSession]);
 
-  const handleStart = () => { setIsRestored(false); startStream(); };
-  const handleClear = () => { setIsRestored(false); clearHistory(); };
+  const handleStartAttempt = () => { setIsRestored(false); startStream(); };
+  const handleResetAttempt = () => { setIsRestored(false); handleClear(); };
 
-  const sc = STATUS_CONFIG[status] || STATUS_CONFIG.idle;
+  const sc = STATUS_CONFIG[status] || STATUS_CONFIG[StreamStatus.IDLE];
 
   return (
     <div className="min-h-screen pb-12" style={{ paddingTop: 64 }}>
       <Navbar />
 
       <div className="max-w-7xl mx-auto px-6 py-8">
-        {/* Header Section */}
+        {/* Diagnostic Header */}
         <motion.div 
           className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-10"
           initial={{ opacity: 0, y: -20 }}
@@ -55,10 +58,10 @@ export default function Dashboard() {
         >
           <div>
             <h1 className="text-3xl font-display font-bold text-white tracking-tight">
-              Neural Command Center
+              Neuro-Diagnostic Dashboard
             </h1>
             <p className="text-sm mt-1" style={{ color: "#6B8BAE" }}>
-              BCI Stream v2.1 • 400ms Sampling • Subject Monitoring
+              BCI Analytical Pipeline v2.2 • 400ms High-Frequency Sampling • Subject Monitoring
             </p>
           </div>
 
@@ -76,22 +79,22 @@ export default function Dashboard() {
             </div>
 
             {!streaming ? (
-              <button onClick={handleStart} className="btn-primary shadow-lg shadow-cyan-500/20">
-                🚀 Initialize Stream
+              <button onClick={handleStartAttempt} className="btn-primary shadow-lg shadow-cyan-500/20">
+                Establish Connection
               </button>
             ) : (
               <button onClick={stopStream} className="btn-danger shadow-lg shadow-red-500/20">
-                🛑 Terminate
+                Disconnect
               </button>
             )}
             
-            <button onClick={handleClear} className="px-4 py-2 text-xs font-bold text-slate-400 hover:text-white transition-colors">
-              Reset
+            <button onClick={handleResetAttempt} className="px-4 py-2 text-xs font-bold text-slate-400 hover:text-white transition-colors">
+              Reset Session
             </button>
           </div>
         </motion.div>
 
-        {/* Status Messaging */}
+        {/* System Notifications */}
         <AnimatePresence>
           {error && (
             <motion.div 
@@ -100,15 +103,14 @@ export default function Dashboard() {
               animate={{ opacity: 1, height: 'auto' }}
               exit={{ opacity: 0, height: 0 }}
             >
-              <span className="text-lg">⚠️</span>
-              <p><strong>System Error:</strong> {error} — Verify ML cluster status.</p>
+              <p><strong>System Message:</strong> {error}</p>
             </motion.div>
           )}
         </AnimatePresence>
 
-        {/* Main Grid Interface */}
+        {/* Analytical Interface */}
         <div className="relative">
-          {/* Waiting Overlay */}
+          {/* Connection Overlay */}
           <AnimatePresence>
             {streaming && !hasReceivedFirstPacket && (
               <motion.div 
@@ -119,31 +121,29 @@ export default function Dashboard() {
                 style={{ background: "rgba(10,15,30,0.4)" }}
               >
                 <div className="w-16 h-16 border-4 border-cyan-500/20 border-t-cyan-500 rounded-full animate-spin mb-4" />
-                <h3 className="text-xl font-bold text-white mb-2">Syncing Neural Link</h3>
-                <p className="text-sm text-slate-400">Waiting for brain signal packet...</p>
+                <h3 className="text-xl font-bold text-white mb-2">Establishing Signal Connection</h3>
+                <p className="text-sm text-slate-400">Awaiting neural telemetry data...</p>
               </motion.div>
             )}
           </AnimatePresence>
 
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-            {/* Real-time Gauges */}
+            {/* Real-time Telemetry Gauges */}
             <div className="lg:col-span-1 flex flex-col gap-6">
               <MetricsGauge 
-                title="Cognitive Stress" 
+                title="Mental Stress Index" 
                 value={metrics.stress} 
                 color="#FF3366" 
-                icon="⚡" 
               />
               <MetricsGauge 
-                title="Task Engagement" 
+                title="Cognitive Engagement" 
                 value={metrics.engagement} 
                 color="#00D4FF" 
-                icon="🏗️" 
               />
               <ConfidenceMeter prediction={prediction} />
             </div>
 
-            {/* Main Visualizations */}
+            {/* Neuro-Visualizations */}
             <div className="lg:col-span-3 flex flex-col gap-6">
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                 <PerformanceChart buffer={eegBuffer} />
@@ -162,7 +162,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Restoration Badge */}
+        {/* Data Recovery Indicator */}
         <AnimatePresence>
           {isRestored && !streaming && (
             <motion.div 
@@ -171,7 +171,7 @@ export default function Dashboard() {
               animate={{ y: 0, opacity: 1 }}
               exit={{ y: 50, opacity: 0 }}
             >
-              <span className="animate-pulse">●</span> Physical Session Cache Restored
+              <span className="animate-pulse">●</span> Historical Session Cache Restored
             </motion.div>
           )}
         </AnimatePresence>

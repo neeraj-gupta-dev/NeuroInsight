@@ -1,7 +1,7 @@
 // frontend/src/components/MetricsGauge.jsx
 import { motion } from "framer-motion";
 
-export default function MetricsGauge({ title, value, color, icon }) {
+export default function MetricsGauge({ title, value, color }) {
   const radius = 40;
   const circumference = 2 * Math.PI * radius;
   const offset = circumference - (value / 100) * circumference;
@@ -14,8 +14,7 @@ export default function MetricsGauge({ title, value, color, icon }) {
       transition={{ duration: 0.5 }}
     >
       <div className="absolute top-3 left-4 flex items-center gap-2">
-        <span className="text-lg">{icon}</span>
-        <span className="text-xs font-bold uppercase tracking-tighter" style={{ color: "#6B8BAE" }}>
+        <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: "#6B8BAE" }}>
           {title}
         </span>
       </div>
@@ -52,11 +51,13 @@ export default function MetricsGauge({ title, value, color, icon }) {
           >
             {Math.round(value)}
           </motion.span>
-          <span className="text-[10px]" style={{ color: "#6B8BAE" }}>%</span>
+          <span className="text-[8px] font-bold uppercase tracking-widest mt-[-2px]" style={{ color: "#6B8BAE" }}>
+            Percentage
+          </span>
         </div>
       </div>
       
-      {/* Background Glow */}
+      {/* Structural Accent */}
       <div 
         className="absolute bottom-0 left-0 right-0 h-1 opacity-20"
         style={{ background: `linear-gradient(90deg, transparent, ${color}, transparent)` }}

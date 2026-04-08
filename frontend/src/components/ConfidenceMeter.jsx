@@ -10,41 +10,50 @@ function Arc({ pct, color }) {
 
   return (
     <svg width="180" height="100" viewBox="0 0 180 105">
-      {/* Track */}
+      {/* Structural Track */}
       <path
         d={`M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}`}
         fill="none"
-        stroke="rgba(255,255,255,0.07)"
-        strokeWidth={12}
+        stroke="rgba(255,255,255,0.05)"
+        strokeWidth={14}
         strokeLinecap="round"
       />
-      {/* Fill */}
+      {/* Dynamic Data Fill */}
       <motion.path
         d={`M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}`}
         fill="none"
         stroke={color}
-        strokeWidth={12}
+        strokeWidth={14}
         strokeLinecap="round"
         strokeDasharray={`${circ}`}
         initial={{ strokeDashoffset: circ }}
         animate={{ strokeDashoffset: circ - dash }}
         transition={{ duration: 0.8, ease: "easeOut" }}
-        style={{ filter: `drop-shadow(0 0 6px ${color})` }}
+        style={{ filter: `drop-shadow(0 0 12px ${color}44)` }}
       />
-      {/* Percentage label */}
+      {/* Statistical value representation */}
       <text
         x={cx}
-        y={cy - 10}
+        y={cy - 12}
         textAnchor="middle"
-        fontSize={22}
-        fontWeight={700}
-        fontFamily="Space Grotesk"
-        fill={color}
+        fontSize={28}
+        fontWeight={800}
+        fontFamily="Inter, sans-serif"
+        fill="#E8F4FF"
       >
         {pct.toFixed(0)}%
       </text>
-      <text x={cx} y={cy + 8} textAnchor="middle" fontSize={10} fill="#6B8BAE">
-        confidence
+      <text 
+        x={cx} 
+        y={cy + 12} 
+        textAnchor="middle" 
+        fontSize={10} 
+        fontWeight={700}
+        fontFamily="Inter, sans-serif"
+        fill="#4B5B7E" 
+        className="uppercase tracking-[0.2em]"
+      >
+        Confidence Level
       </text>
     </svg>
   );
@@ -71,20 +80,19 @@ export default function ConfidenceMeter({ prediction }) {
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, delay: 0.1 }}
     >
-      <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: "#6B8BAE" }}>
-        Model Confidence
+      <p className="text-[10px] font-bold uppercase tracking-widest mb-3" style={{ color: "#6B8BAE" }}>
+        Statistical Confidence Analysis
       </p>
 
       <div className="flex flex-col items-center">
         <Arc pct={pct} color={color} />
 
-        {/* Gradient bar */}
-        <div className="w-full mt-3 rounded-full overflow-hidden" style={{ height: 6, background: "rgba(255,255,255,0.06)" }}>
+        {/* Linear scale indicator */}
+        <div className="w-full mt-4 rounded-full overflow-hidden" style={{ height: 4, background: "rgba(255,255,255,0.03)" }}>
           <motion.div
             className="h-full rounded-full"
             style={{
-              background: `linear-gradient(90deg, ${color}88, ${color})`,
-              boxShadow: `0 0 10px ${color}66`,
+              background: `linear-gradient(90deg, ${color}66, ${color})`,
             }}
             initial={{ width: "0%" }}
             animate={{ width: `${pct}%` }}
@@ -92,9 +100,9 @@ export default function ConfidenceMeter({ prediction }) {
           />
         </div>
 
-        <div className="flex w-full justify-between mt-1">
-          <span className="text-xs" style={{ color: "#6B8BAE" }}>0%</span>
-          <span className="text-xs" style={{ color: "#6B8BAE" }}>100%</span>
+        <div className="flex w-full justify-between mt-2">
+          <span className="text-[9px] font-bold" style={{ color: "#3B4B6E" }}>0.0 P</span>
+          <span className="text-[9px] font-bold" style={{ color: "#3B4B6E" }}>1.0 P</span>
         </div>
       </div>
     </motion.div>

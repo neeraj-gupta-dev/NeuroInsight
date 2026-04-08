@@ -2,11 +2,11 @@
 import { motion, AnimatePresence } from "framer-motion";
 
 const STATE_CONFIG = {
-  Focused:    { color: "#00D4FF", icon: "🎯", desc: "High attention & task engagement",    class: "border-glow-cyan"   },
-  Relaxed:    { color: "#00FF88", icon: "🌿", desc: "Calm, low arousal mental state",       class: "border-glow-green"  },
-  Stressed:   { color: "#FF6B35", icon: "⚡", desc: "Heightened arousal & tension",         class: "border-glow-orange" },
-  Distracted: { color: "#FFD700", icon: "💫", desc: "Unfocused, mind wandering",            class: "border-glow-amber"  },
-  Drowsy:     { color: "#7B2FBE", icon: "🌙", desc: "Low arousal, theta-dominant pattern", class: "border-glow-violet" },
+  Focused:    { color: "#00D4FF", desc: "High attentional engagement and active processing",    class: "border-glow-cyan"   },
+  Relaxed:    { color: "#00FF88", desc: "Baseline physiological state with low arousal",       class: "border-glow-green"  },
+  Stressed:   { color: "#FF6B35", desc: "Heightened neural arousal and cognitive tension",         class: "border-glow-orange" },
+  Distracted: { color: "#FFD700", desc: "Attentional shift; non-task-related processing",            class: "border-glow-amber"  },
+  Drowsy:     { color: "#7B2FBE", desc: "Reduced alertness; theta-dominant neural patterns", class: "border-glow-violet" },
 };
 
 export default function CognitiveStateCard({ prediction }) {
@@ -21,8 +21,8 @@ export default function CognitiveStateCard({ prediction }) {
       animate={{ opacity: 1, scale: 1 }}
       transition={{ duration: 0.4 }}
     >
-      <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: "#6B8BAE" }}>
-        Current Cognitive State
+      <p className="text-xs font-bold uppercase tracking-widest mb-3" style={{ color: "#6B8BAE" }}>
+        Cognitive State Analysis
       </p>
 
       <AnimatePresence mode="wait">
@@ -34,26 +34,17 @@ export default function CognitiveStateCard({ prediction }) {
             exit={{ opacity: 0, y: -10 }}
             transition={{ duration: 0.3 }}
           >
-            <div className="flex items-center gap-4 mb-4">
-              <motion.span
-                className="text-5xl"
-                animate={{ scale: [1, 1.12, 1] }}
-                transition={{ duration: 2, repeat: Infinity }}
+            <div className="flex flex-col gap-1 mb-4">
+              <h2
+                className="font-display font-bold text-3xl leading-tight tracking-tight"
+                style={{ color: cfg.color, textShadow: `0 0 20px ${cfg.color}33` }}
               >
-                {cfg.icon}
-              </motion.span>
-              <div>
-                <h2
-                  className="font-display font-bold text-3xl leading-none"
-                  style={{ color: cfg.color, textShadow: `0 0 20px ${cfg.color}55` }}
-                >
-                  {state}
-                </h2>
-                <p className="text-xs mt-1" style={{ color: "#6B8BAE" }}>{cfg.desc}</p>
-              </div>
+                {state.toUpperCase()}
+              </h2>
+              <p className="text-xs font-medium" style={{ color: "#6B8BAE" }}>{cfg.desc}</p>
             </div>
 
-            {/* Probability pills */}
+            {/* Probability data grid */}
             {prediction?.all_probabilities && (
               <div className="flex flex-wrap gap-2">
                 {Object.entries(prediction.all_probabilities)
@@ -61,27 +52,27 @@ export default function CognitiveStateCard({ prediction }) {
                   .map(([s, p]) => (
                     <div
                       key={s}
-                      className="status-badge"
+                      className="status-badge text-[10px]"
                       style={{
                         background: s === state
-                          ? `${(STATE_CONFIG[s]?.color || "#fff")}22`
-                          : "rgba(255,255,255,0.04)",
+                          ? `${(STATE_CONFIG[s]?.color || "#fff")}15`
+                          : "rgba(255,255,255,0.02)",
                         color: s === state
                           ? (STATE_CONFIG[s]?.color || "#fff")
                           : "#6B8BAE",
                         border: `1px solid ${s === state
-                          ? `${(STATE_CONFIG[s]?.color || "#fff")}44`
-                          : "rgba(255,255,255,0.08)"}`,
+                          ? `${(STATE_CONFIG[s]?.color || "#fff")}33`
+                          : "rgba(255,255,255,0.05)"}`,
                       }}
                     >
-                      {s}: {(p * 100).toFixed(1)}%
+                      {s.toUpperCase()}: {(p * 100).toFixed(1)}%
                     </div>
                   ))}
               </div>
             )}
 
-            <div className="mt-3 text-xs" style={{ color: "#6B8BAE" }}>
-              Epoch #{prediction?.epochId ?? "—"} · Subject {prediction?.subject ?? "—"}
+            <div className="mt-4 pt-3 border-t border-white/5 text-[9px] font-bold uppercase tracking-widest" style={{ color: "#4B5B7E" }}>
+              Sample Identifier: {prediction?.epochId ?? "N/A"} • Subject ID: {prediction?.subject ?? "N/A"}
             </div>
           </motion.div>
         ) : (
@@ -89,10 +80,14 @@ export default function CognitiveStateCard({ prediction }) {
             key="empty"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            className="flex flex-col items-center py-6"
+            className="flex flex-col items-center py-8"
           >
-            <div className="text-4xl mb-3">🧠</div>
-            <p className="text-sm" style={{ color: "#6B8BAE" }}>Awaiting EEG stream …</p>
+            <div className="w-12 h-12 border border-white/5 rounded-full flex items-center justify-center mb-4">
+               <div className="w-2 h-2 bg-slate-700 rounded-full animate-pulse" />
+            </div>
+            <p className="text-xs font-bold uppercase tracking-widest" style={{ color: "#4B5B7E" }}>
+              Awaiting Telemetry Ingestion
+            </p>
           </motion.div>
         )}
       </AnimatePresence>
