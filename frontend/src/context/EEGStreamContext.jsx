@@ -1,8 +1,4 @@
 // frontend/src/context/EEGStreamContext.jsx
-//
-// Global EEG stream state that survives page navigation.
-// The stream lifecycle is managed here, NOT in individual components.
-
 import {
   createContext, useContext, useRef,
   useState, useCallback, useEffect,
@@ -12,17 +8,25 @@ const EEGStreamContext = createContext(null);
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 const SSE_PATH         = "/api/eeg/stream";
-const MAX_CHART_POINTS = 60;
-const RECONNECT_DELAY  = 1500; // ms to wait before reconnecting
+const WATCHDOG_TIMEOUT = 30000; // 30s timeout for silent failures
+
+/**
+ * EEG Stream States
+ */
+export const StreamStatus = {
+  IDLE:         "IDLE",
+  CONNECTING:   "CONNECTING",
+  CONNECTED:    "CONNECTED",
+  DEGRADED:     "DEGRADED",
+  RECONNECTING: "RECONNECTING",
+  DISCONNECTED: "DISCONNECTED",
+  ERROR:        "ERROR",
+};
 
 export function EEGStreamProvider({ children }) {
-  // ── Visible state (drives UI) ───────────────────────────────────────────
   const [streaming,    setStreaming]    = useState(false);
-  const [status,       setStatus]      = useState("idle");
-  const [connectionStatus, setConnectionStatus] = useState("closed");
-  
-  // Real-time data stores
-  const [eegBuffer,    setEegBuffer]   = useState([]); // Sliding window (60s)
+  const [status,       setStatus]      = useState(StreamStatus.IDLE);
+  const [eegBuffer,    setEegBuffer]   = useState([]); 
   const [latestSample, setLatestSample] = useState(null);
   const [metrics,      setMetrics]     = useState({
     attention: 0, relaxation: 0, stress: 0, engagement: 0
@@ -36,27 +40,39 @@ export function EEGStreamProvider({ children }) {
       return saved ? JSON.parse(saved) : [];
     } catch { return []; }
   });
-  const [sessionCount, setSessionCount] = useState(0);
   const [error,        setError]       = useState(null);
 
-  // ── Internal refs (never trigger re-renders) ────────────────────────────
-  const esRef          = useRef(null);
-  const intentRef      = useRef(false);
-  const reconnTimerRef = useRef(null);
-  const saveCounterRef = useRef(0);
+  // ── Internal Refs ────────────────────────────────────────────────────────
+  const esRef             = useRef(null);
+  const intentRef         = useRef(false);
+  const reconnTimerRef    = useRef(null);
+  const reconnectAttempts = useRef(0);
+  const watchdogTimerRef  = useRef(null);
   
-  // Session Recording Refs
-  const sessionRef     = useRef([]); // Array of 5s snapshots
-  const lastSnapshotT  = useRef(0);  // Last time a snapshot was taken
+  const sessionRef     = useRef([]);
+  const lastSnapshotT  = useRef(0);
   const streamStartT   = useRef(0);
 
-  // SSE parser is now handled by native event listeners
+  // ── Watchdog Management ──────────────────────────────────────────────────
+  const resetWatchdog = useCallback(() => {
+    if (watchdogTimerRef.current) clearTimeout(watchdogTimerRef.current);
+    watchdogTimerRef.current = setTimeout(() => {
+      console.warn("[Telemetry] Watchdog timeout: No signal detected for 30s.");
+      setStatus(StreamStatus.DEGRADED);
+      handleReconnect();
+    }, WATCHDOG_TIMEOUT);
+  }, []);
 
-  // ── Snapshot Recorder (Every 5s) ────────────────────────────────────────
+  const clearWatchdog = useCallback(() => {
+    if (watchdogTimerRef.current) {
+      clearTimeout(watchdogTimerRef.current);
+      watchdogTimerRef.current = null;
+    }
+  }, []);
+
+  // ── Session Recording ────────────────────────────────────────────────────
   const takeSnapshot = useCallback((currentBuffer, now) => {
     if (now - lastSnapshotT.current < 5000) return;
-    
-    // Calculate averages from the buffer for the last 5 seconds
     const recent = currentBuffer.filter(s => now - s.timestamp < 5000);
     if (recent.length === 0) return;
 
@@ -75,7 +91,6 @@ export function EEGStreamProvider({ children }) {
     lastSnapshotT.current = now;
   }, []);
 
-  // ── Finalize & Save Session ──────────────────────────────────────────────
   const finalizeSession = useCallback(() => {
     if (sessionRef.current.length < 2) {
       sessionRef.current = [];
@@ -106,7 +121,7 @@ export function EEGStreamProvider({ children }) {
     };
 
     setSessions(prev => {
-      const next = [newSession, ...prev].slice(0, 50); // FIFO cap 50
+      const next = [newSession, ...prev].slice(0, 50); 
       localStorage.setItem("neuro_sessions", JSON.stringify(next));
       return next;
     });
@@ -114,7 +129,28 @@ export function EEGStreamProvider({ children }) {
     sessionRef.current = [];
   }, []);
 
-  // ── Core stream runner ───────────────────────────────────────────────────
+  // ── Core Stream Management ────────────────────────────────────────────────
+  const handleReconnect = useCallback(() => {
+    if (!intentRef.current) return;
+    
+    if (esRef.current) {
+      esRef.current.close();
+      esRef.current = null;
+    }
+    clearWatchdog();
+
+    reconnectAttempts.current += 1;
+    const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 30000);
+    
+    console.log(`[Telemetry] Attempting secure reconnection in ${delay}ms... (Attempt ${reconnectAttempts.current})`);
+    setStatus(StreamStatus.RECONNECTING);
+    setError("Connection to EEG telemetry server lost. Attempting secure reconnection...");
+
+    reconnTimerRef.current = setTimeout(() => {
+      runStream();
+    }, delay);
+  }, []);
+
   const runStream = useCallback(async () => {
     if (esRef.current) return;
 
@@ -123,104 +159,96 @@ export function EEGStreamProvider({ children }) {
     sessionRef.current     = [];
     setError(null);
     setStreaming(true);
-    setStatus("connecting");
-    setConnectionStatus("connecting");
+    setStatus(reconnectAttempts.current > 0 ? StreamStatus.RECONNECTING : StreamStatus.CONNECTING);
     setHasReceivedFirstPacket(false);
 
     const token = localStorage.getItem("ni_token");
-    const streamUrl = `${API_BASE_URL}${SSE_PATH}?token=${token}`;
-    console.log("[SSE] Connecting to:", streamUrl);
-    
-    // 1. Create EventSource correctly
-    const es = new EventSource(streamUrl, { withCredentials: true });
-    esRef.current = es;
-
-    es.onopen = () => {
-      console.log("[SSE] Connection opened successfully");
-    };
-
-    // 2. Handle connection handshake
-    es.addEventListener("connected", () => {
-      console.log("[SSE] Connected event received");
-      setConnectionStatus("connected");
-      setStatus("live");
-    });
-
-    // 3. Handle EEG packets (CRITICAL)
-    es.addEventListener("eeg", (event) => {
-      try {
-        const pkt = JSON.parse(event.data);
-        const now = Date.now();
-        console.log("[SSE] EEG packet received", pkt.epoch_id);
-
-        setHasReceivedFirstPacket(true); // THIS HIDES LOADER
-
-        // Update sliding window buffer (60 seconds)
-        setEegBuffer(prev => {
-          const next = [...prev, pkt].filter(s => now - (s.timestamp || now) < 60000);
-          takeSnapshot(next, now);
-          return next;
-        });
-
-        // Update status/metrics/prediction
-        setLatestSample(pkt);
-        setMetrics({
-          attention: pkt.attention,
-          relaxation: pkt.relaxation,
-          stress: pkt.stress,
-          engagement: pkt.engagement
-        });
-        setPrediction(pkt.prediction);
-
-        localStorage.setItem("neuro_last_session", event.data);
-      } catch (err) {
-        console.error("[SSE] EEG parse error", err);
-      }
-    });
-
-    // 4. Handle errors
-    es.addEventListener("error", (event) => {
-      console.error("[SSE] Stream error", event);
-      setConnectionStatus("error");
-      setError("Stream connection error occurred.");
-      
-      // Auto-cleanup on error to trigger reconnect or stop
-      if (esRef.current) {
-        esRef.current.close();
-        esRef.current = null;
-      }
-
-      if (intentRef.current) {
-        reconnTimerRef.current = setTimeout(() => runStream(), RECONNECT_DELAY);
-      } else {
-        finalizeSession();
+    if (!token) {
+        setError("Authentication session expired. Please sign in again.");
+        setStatus(StreamStatus.ERROR);
         setStreaming(false);
-        setConnectionStatus("closed");
-        setStatus("idle");
-      }
-    });
-  }, [takeSnapshot, finalizeSession]);
+        return;
+    }
+
+    const streamUrl = `${API_BASE_URL}${SSE_PATH}?token=${token}`;
+    
+    try {
+      const es = new EventSource(streamUrl, { withCredentials: true });
+      esRef.current = es;
+
+      es.onopen = () => {
+        console.log("[Telemetry] Secure channel established.");
+        reconnectAttempts.current = 0;
+        resetWatchdog();
+      };
+
+      es.addEventListener("connected", () => {
+        setStatus(StreamStatus.CONNECTED);
+      });
+
+      es.addEventListener("heartbeat", () => {
+        resetWatchdog();
+      });
+
+      es.addEventListener("eeg", (event) => {
+        try {
+          const pkt = JSON.parse(event.data);
+          const now = Date.now();
+          resetWatchdog();
+
+          setHasReceivedFirstPacket(true);
+
+          setEegBuffer(prev => {
+            const next = [...prev, pkt].filter(s => now - (s.timestamp || now) < 60000);
+            takeSnapshot(next, now);
+            return next;
+          });
+
+          setLatestSample(pkt);
+          setMetrics({
+            attention: pkt.attention,
+            relaxation: pkt.relaxation,
+            stress: pkt.stress,
+            engagement: pkt.engagement
+          });
+          setPrediction(pkt.prediction);
+          localStorage.setItem("neuro_last_session", event.data);
+        } catch (err) {
+          console.error("[Telemetry] Signal processing error:", err);
+        }
+      });
+
+      es.onerror = (event) => {
+        console.error("[Telemetry] Signal interruption detected.", event);
+        handleReconnect();
+      };
+    } catch (err) {
+      console.error("[Telemetry] Initialization failed:", err);
+      handleReconnect();
+    }
+  }, [handleReconnect, resetWatchdog, clearWatchdog, takeSnapshot]);
 
   const startStream = useCallback(() => {
     intentRef.current = true;
+    reconnectAttempts.current = 0;
     runStream();
   }, [runStream]);
 
   const stopStream = useCallback(() => {
     intentRef.current = false;
     clearTimeout(reconnTimerRef.current);
+    clearWatchdog();
     if (esRef.current) {
       esRef.current.close();
       esRef.current = null;
     }
     finalizeSession();
     setStreaming(false);
-    setConnectionStatus("closed");
-    setStatus("idle");
-  }, [finalizeSession]);
+    setStatus(StreamStatus.DISCONNECTED);
+  }, [finalizeSession, clearWatchdog]);
 
   const clearHistory = useCallback(() => {
-    if (confirm("Permanently delete all session history?")) {
+    if (confirm("Permanently delete all clinical session history?")) {
       localStorage.removeItem("neuro_sessions");
       setSessions([]);
     }
@@ -240,18 +268,19 @@ export function EEGStreamProvider({ children }) {
 
   useEffect(() => () => {
     intentRef.current = false;
+    clearWatchdog();
     if (esRef.current) {
       esRef.current.close();
       esRef.current = null;
     }
-  }, []);
+  }, [clearWatchdog]);
 
   return (
     <EEGStreamContext.Provider
       value={{
-        streaming, status, connectionStatus, hasReceivedFirstPacket,
+        streaming, status, hasReceivedFirstPacket,
         eegBuffer, latestSample, metrics,
-        prediction, sessionCount, error,
+        prediction, error,
         sessions, startStream, stopStream, clearHistory, restoreSession,
       }}
     >
@@ -262,6 +291,6 @@ export function EEGStreamProvider({ children }) {
 
 export function useEEGStream() {
   const ctx = useContext(EEGStreamContext);
-  if (!ctx) throw new Error("useEEGStream must be used inside EEGStreamProvider");
+  if (!ctx) throw new Error("useEEGStream requires EEGStreamProvider enclosure.");
   return ctx;
 }
