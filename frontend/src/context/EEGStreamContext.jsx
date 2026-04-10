@@ -185,11 +185,25 @@ export function EEGStreamProvider({ children }) {
       };
 
       es.addEventListener("connected", () => {
-        // Upstream ML service confirmed alive. But don't reset retry counter yet —
-        // only reset after actual EEG data flows (proves the full pipeline works).
+        // Backend proxy SSE pipe is alive. Upstream may still be connecting.
         receivedConnected = true;
-        console.log("[Telemetry] Upstream synchronized. Awaiting data flow...");
+        console.log("[Telemetry] Proxy channel active. Waiting for ML upstream...");
         setStatus(StreamStatus.CONNECTED);
+        resetWatchdog();
+      });
+
+      es.addEventListener("status", (event) => {
+        // Backend is retrying upstream connection — stream is alive, just waiting
+        try {
+          const info = JSON.parse(event.data);
+          console.log(`[Telemetry] ${info.message || "Connecting..."} (attempt ${info.attempt})`);
+        } catch (_) {}
+        resetWatchdog();
+      });
+
+      es.addEventListener("upstream", () => {
+        // Upstream ML service is now connected and streaming
+        console.log("[Telemetry] ML upstream synchronized. Data flow active.");
         resetWatchdog();
       });
 
