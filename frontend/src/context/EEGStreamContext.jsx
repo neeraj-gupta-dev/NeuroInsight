@@ -185,15 +185,16 @@ export function EEGStreamProvider({ children }) {
       };
 
       es.addEventListener("connected", () => {
-        // Upstream ML service is confirmed alive and streaming
+        // Upstream ML service confirmed alive. But don't reset retry counter yet —
+        // only reset after actual EEG data flows (proves the full pipeline works).
         receivedConnected = true;
-        reconnectAttempts.current = 0;
-        console.log("[Telemetry] Secure channel established. Upstream synchronized.");
+        console.log("[Telemetry] Upstream synchronized. Awaiting data flow...");
         setStatus(StreamStatus.CONNECTED);
         resetWatchdog();
       });
 
       es.addEventListener("heartbeat", () => {
+        receivedConnected = true;
         resetWatchdog();
       });
 

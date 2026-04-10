@@ -5,19 +5,12 @@ import time
 
 async def stream():
     """
-    Core streaming generator. 
-    Yields events as dictionaries for EventSourceResponse.
+    Core streaming generator.
+    Yields EEG events as dictionaries. The backend proxy handles
+    the 'connected' handshake, so this generator only yields data.
     """
     print("[STREAM] EEG streamer started")
 
-    # 1. Immediate handshake
-    yield {
-        "event": "connected",
-        "data": "ok"
-    }
-
-    # 2. Delay to prevent race conditions with proxy buffers
-    await asyncio.sleep(1)
 
     idx = 0
     while True:

@@ -8,78 +8,88 @@ from services.eeg_streamer import stream
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# Connection Guard: Keeps track of unique client connections to prevent flooding
-# Render Free Tier allows limited concurrent connections.
+# Connection Guard: per-IP counter to prevent connection flooding.
 from collections import defaultdict
 active_connections = defaultdict(int)
 
 @router.get("/api/eeg/stream")
 async def eeg_stream(request: Request):
     """
-    Render-optimized SSE streaming router.
-    Implements:
-    - Manual StreamingResponse for zero-buffer transmission.
-    - 15s Heartbeat loop to keep Render proxy alive.
-    - Connection Guard (up to 5 streams per IP) to prevent 429 throttling but allow page reloads.
+    Render-hardened SSE streaming endpoint.
+    
+    Key design decisions:
+    - NO request.is_disconnected() — unreliable behind Render's reverse proxy,
+      can return True prematurely and kill the stream. Instead, we rely on
+      exception handling when writes fail to a closed socket.
+    - NO manual Transfer-Encoding header — Starlette handles chunked encoding
+      automatically. Setting it manually causes double-encoding corruption.
+    - Heartbeat every 3 seconds — Render's proxy kills connections after ~10s
+      of silence. 3s gives a 3x safety margin.
     """
     client_ip = request.headers.get("X-Forwarded-For", request.client.host)
     
     if active_connections[client_ip] >= 5:
-        logger.warning(f"[ML STREAM] Connection rejected for {client_ip}: Concurrency limit reached ({active_connections[client_ip]} active).")
+        logger.warning(f"[ML STREAM] Rejected {client_ip}: {active_connections[client_ip]} active")
         return StreamingResponse(
-            iter([f"event: fatal\ndata: {{\"error\": \"Concurrency limit reached\", \"ip\": \"{client_ip}\"}}\n\n"]),
+            iter([f"event: fatal\ndata: {{\"error\": \"Concurrency limit\"}}\n\n"]),
             status_code=429,
             media_type="text/event-stream"
         )
 
     async def event_publisher():
         active_connections[client_ip] += 1
-        logger.info(f"[ML STREAM] Connection established for {client_ip}. Active for this IP: {active_connections[client_ip]}")
+        logger.info(f"[ML STREAM] Connected: {client_ip} (active: {active_connections[client_ip]})")
         
-        # 1. Immediate heartbeat to prevent Render from closing connection during cold-start
-        yield "event: heartbeat\ndata: ping\n\n"
-
-        # Core streaming generator
         stream_gen = stream()
-        last_heartbeat = time.time()
+        last_yield = time.time()
         
         try:
             while True:
-                if await request.is_disconnected():
-                    break
-
-                # 2. Frequent 5s heartbeat to bypass Render 10s idle timeout
-                if time.time() - last_heartbeat > 5:
+                now = time.time()
+                
+                # Heartbeat every 3 seconds of silence.
+                # This keeps Render's proxy from killing the connection.
+                if now - last_yield > 3:
                     yield "event: heartbeat\ndata: ping\n\n"
-                    last_heartbeat = time.time()
+                    last_yield = time.time()
 
                 try:
-                    # Short timeout to keep loop responsive to heartbeat cycle
+                    # Pull next event from the core EEG generator.
+                    # 1s timeout so we can loop back to check heartbeat.
                     event = await asyncio.wait_for(anext(stream_gen), timeout=1.0)
-                    yield f"event: {event.get('event', 'message')}\ndata: {event.get('data', '')}\n\n"
-                    # Reset heartbeat timer on actual data transmission
-                    last_heartbeat = time.time()
+                    
+                    event_name = event.get("event", "message")
+                    event_data = event.get("data", "")
+                    yield f"event: {event_name}\ndata: {event_data}\n\n"
+                    last_yield = time.time()
+                    
                 except asyncio.TimeoutError:
+                    # No data ready — loop back to heartbeat check
                     continue
                 except StopAsyncIteration:
+                    logger.info(f"[ML STREAM] Generator exhausted for {client_ip}")
                     break
 
+        except asyncio.CancelledError:
+            # Client disconnected — ASGI server cancelled the task
+            logger.info(f"[ML STREAM] Client disconnect (cancelled): {client_ip}")
         except Exception as e:
-            logger.error(f"[ML STREAM ERROR] {client_ip}: {str(e)}")
+            logger.error(f"[ML STREAM ERROR] {client_ip}: {e}")
         finally:
             active_connections[client_ip] -= 1
             if active_connections[client_ip] <= 0:
                 del active_connections[client_ip]
-            logger.info(f"[ML STREAM] Connection closed for {client_ip}. Active for this IP: {active_connections.get(client_ip, 0)}")
+            logger.info(f"[ML STREAM] Closed: {client_ip} (remaining: {active_connections.get(client_ip, 0)})")
 
     return StreamingResponse(
         event_publisher(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control":      "no-cache, no-transform",
-            "Connection":         "keep-alive",
-            "X-Accel-Buffering":  "no",
+            "Cache-Control":          "no-cache, no-store, no-transform",
+            "Connection":             "keep-alive",
+            "X-Accel-Buffering":      "no",
             "X-Content-Type-Options": "nosniff",
-            "Transfer-Encoding":  "chunked"
+            # DO NOT set Transfer-Encoding — Starlette handles it automatically.
+            # Setting it manually causes double-chunked encoding corruption.
         }
     )
