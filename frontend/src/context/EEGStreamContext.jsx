@@ -171,19 +171,26 @@ export function EEGStreamProvider({ children }) {
     }
 
     const streamUrl = `${API_BASE_URL}${SSE_PATH}?token=${token}`;
+    let receivedConnected = false;
     
     try {
       const es = new EventSource(streamUrl, { withCredentials: true });
       esRef.current = es;
 
       es.onopen = () => {
-        console.log("[Telemetry] Secure channel established.");
-        reconnectAttempts.current = 0;
+        // HTTP channel opened — but upstream may not be ready yet.
+        // Do NOT reset reconnect counter here; wait for 'connected' event.
+        console.log("[Telemetry] HTTP channel opened. Waiting for upstream sync...");
         resetWatchdog();
       };
 
       es.addEventListener("connected", () => {
+        // Upstream ML service is confirmed alive and streaming
+        receivedConnected = true;
+        reconnectAttempts.current = 0;
+        console.log("[Telemetry] Secure channel established. Upstream synchronized.");
         setStatus(StreamStatus.CONNECTED);
+        resetWatchdog();
       });
 
       es.addEventListener("heartbeat", () => {
@@ -195,6 +202,12 @@ export function EEGStreamProvider({ children }) {
           const pkt = JSON.parse(event.data);
           const now = Date.now();
           resetWatchdog();
+
+          // Mark that we've received real data
+          if (!receivedConnected) {
+            receivedConnected = true;
+            reconnectAttempts.current = 0;
+          }
 
           setHasReceivedFirstPacket(true);
 
@@ -240,10 +253,14 @@ export function EEGStreamProvider({ children }) {
         }
       });
 
-      es.onerror = (event) => {
+      es.onerror = () => {
         // Only attempt reconnect if it wasn't a fatal terminal event
         if (intentRef.current) {
-          console.error("[Telemetry] Signal interruption detected. Attempting recovery...");
+          if (receivedConnected) {
+            console.warn("[Telemetry] Stream interrupted after successful connection. Reconnecting...");
+          } else {
+            console.warn("[Telemetry] Connection failed before upstream sync. Reconnecting...");
+          }
           handleReconnect();
         }
       };
