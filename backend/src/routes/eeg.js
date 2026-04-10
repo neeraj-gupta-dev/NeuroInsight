@@ -4,9 +4,10 @@
 // POST /api/eeg/predict — proxy to FastAPI /predict
 //
 // ARCHITECTURE:
-// The browser SSE connection is NEVER closed due to upstream failures.
-// If the upstream ML service is unavailable (cold start, crash, etc.),
-// the proxy retries internally while keeping the browser alive with heartbeats.
+// 1. Browser SSE pipe is opened immediately and kept alive with heartbeats
+// 2. Backend wakes up the ML service with a health check before attempting SSE
+// 3. If upstream fails, backend retries internally (up to 20 attempts over ~3 min)
+// 4. Browser connection is NEVER closed due to upstream issues
 
 const http    = require("http");
 const https   = require("https");
@@ -19,17 +20,48 @@ const httpsAgent = new https.Agent({ keepAlive: true, keepAliveMsecs: 10000 });
 const router = express.Router();
 const ML_URL = () => process.env.ML_SERVICE_URL;
 
+// ── Helper: Wake-up ping to ML service ─────────────────────────────────────
+function wakeUpML(baseUrl) {
+  return new Promise((resolve) => {
+    try {
+      const target = new URL(baseUrl);
+      const lib = target.protocol === "https:" ? https : http;
+      const req = lib.get(`${baseUrl}/health`, { timeout: 15000 }, (res) => {
+        let body = "";
+        res.on("data", (c) => body += c);
+        res.on("end", () => {
+          console.log(`[SSE Proxy] ML health: ${res.statusCode} - ${body.slice(0, 100)}`);
+          resolve(res.statusCode === 200);
+        });
+      });
+      req.on("error", (e) => {
+        console.log(`[SSE Proxy] ML health check failed: ${e.message}`);
+        resolve(false);
+      });
+      req.on("timeout", () => {
+        console.log("[SSE Proxy] ML health check timed out");
+        req.destroy();
+        resolve(false);
+      });
+    } catch (e) {
+      resolve(false);
+    }
+  });
+}
+
 // ── GET /api/eeg/stream ────────────────────────────────────────────────────
 router.get("/stream", protect, (req, res) => {
   const baseML = process.env.ML_SERVICE_URL;
   const fullStream = process.env.EEG_STREAM_URL;
   const EEG_SOURCE_URL = fullStream || (baseML ? `${baseML}/api/eeg/stream` : null);
+  // For health check, we need the base URL
+  const ML_BASE = fullStream ? new URL(fullStream).origin : baseML;
 
   if (!EEG_SOURCE_URL) {
     return res.status(503).json({ message: "Telemetry upstream not configured." });
   }
 
-  // ─── 1. SSE Headers — send immediately so browser knows this is SSE ──────
+  // 1. SSE Headers — immediate
   res.writeHead(200, {
     "Content-Type":           "text/event-stream",
     "Cache-Control":          "no-cache, no-store, no-transform",
@@ -38,7 +70,7 @@ router.get("/stream", protect, (req, res) => {
     "X-Content-Type-Options": "nosniff",
   });
 
-  // ─── 2. Socket tuning ────────────────────────────────────────────────────
+  // 2. Socket tuning
   if (res.socket) {
     res.socket.setNoDelay(true);
     res.socket.setKeepAlive(true, 5000);
@@ -49,21 +81,18 @@ router.get("/stream", protect, (req, res) => {
     req.socket.setTimeout(0);
   }
 
-  // ─── 3. Immediate handshake — tells frontend the SSE pipe is alive ───────
+  // 3. Immediate handshake
   res.write("retry: 10000\n");
   res.write(`event: connected\ndata: ${JSON.stringify({ status: "connected", timestamp: Date.now() })}\n\n`);
 
-  // ─── 4. Heartbeat — keeps browser connection alive during upstream retries
+  // 4. Heartbeat — 8s interval keeps Render proxy alive
   const heartbeat = setInterval(() => {
     if (clientDisconnected) return;
-    try {
-      res.write("event: heartbeat\ndata: proxy-ping\n\n");
-    } catch (_) { /* client gone */ }
+    try { res.write("event: heartbeat\ndata: proxy\n\n"); } catch (_) {}
   }, 8000);
 
   let clientDisconnected = false;
   let currentUpstream = null;
-  let upstreamConnected = false;
 
   req.on("close", () => {
     clientDisconnected = true;
@@ -73,31 +102,50 @@ router.get("/stream", protect, (req, res) => {
     }
   });
 
-  // ─── 5. Upstream connection with internal retry ──────────────────────────
+  // 5. Upstream connection with wake-up and retry
   const target = new URL(EEG_SOURCE_URL);
   const lib = target.protocol === "https:" ? https : http;
   const agent = target.protocol === "https:" ? httpsAgent : httpAgent;
 
-  function connectUpstream(attempt) {
+  async function connectUpstream(attempt) {
     if (clientDisconnected) return;
-    if (attempt > 10) {
-      // Give up after 10 attempts — send error but DON'T close the connection.
-      // The frontend's EventSource will eventually hit onerror from watchdog timeout.
-      console.error("[SSE Proxy] Upstream unreachable after 10 attempts. Giving up.");
+
+    const MAX_ATTEMPTS = 20;
+    if (attempt > MAX_ATTEMPTS) {
+      console.error(`[SSE Proxy] Gave up after ${MAX_ATTEMPTS} attempts`);
       try {
-        res.write(`event: error\ndata: ${JSON.stringify({ error: "ML service unavailable after retries" })}\n\n`);
+        res.write(`event: error\ndata: ${JSON.stringify({ error: "ML service unavailable" })}\n\n`);
         res.end();
       } catch (_) {}
       clearInterval(heartbeat);
       return;
     }
 
+    // On first attempt and every 5th retry, send a health-check wake-up ping
+    if (ML_BASE && (attempt === 1 || attempt % 5 === 0)) {
+      try {
+        res.write(`event: status\ndata: ${JSON.stringify({ status: "waking", attempt, message: "Waking ML service..." })}\n\n`);
+      } catch (_) {}
+      
+      const healthy = await wakeUpML(ML_BASE);
+      if (!healthy && attempt === 1) {
+        // ML service is cold — wait a bit and send a status update
+        console.log("[SSE Proxy] ML service not ready, waiting for cold start...");
+        try {
+          res.write(`event: status\ndata: ${JSON.stringify({ status: "coldstart", attempt, message: "ML service starting up..." })}\n\n`);
+        } catch (_) {}
+        // Wait 5s for cold start on first attempt
+        await new Promise(r => setTimeout(r, 5000));
+      }
+    }
+
+    if (clientDisconnected) return;
+
     console.log(`[SSE Proxy] Upstream attempt ${attempt}: ${EEG_SOURCE_URL}`);
 
-    // Notify the browser that we're working on it (only on retries, not first attempt)
     if (attempt > 1) {
       try {
-        res.write(`event: status\ndata: ${JSON.stringify({ status: "connecting", attempt, message: "Waiting for ML service..." })}\n\n`);
+        res.write(`event: status\ndata: ${JSON.stringify({ status: "connecting", attempt, message: "Connecting to ML service..." })}\n\n`);
       } catch (_) {}
     }
 
@@ -108,6 +156,7 @@ router.get("/stream", protect, (req, res) => {
         path:     target.pathname + target.search,
         method:   "GET",
         agent,
+        timeout:  20000, // 20s timeout per attempt
         headers: {
           "Accept":        "text/event-stream",
           "Cache-Control": "no-cache",
@@ -116,18 +165,15 @@ router.get("/stream", protect, (req, res) => {
       },
       (upstream) => {
         if (upstream.statusCode !== 200) {
-          console.warn(`[SSE Proxy] Upstream HTTP ${upstream.statusCode} on attempt ${attempt}`);
-          // Retry after delay — DO NOT close the browser connection
-          const delay = Math.min(2000 * attempt, 15000);
+          console.warn(`[SSE Proxy] Upstream HTTP ${upstream.statusCode} (attempt ${attempt})`);
+          const delay = Math.min(3000 + attempt * 1000, 10000);
           setTimeout(() => connectUpstream(attempt + 1), delay);
           return;
         }
 
-        console.log("[SSE Proxy] Upstream connected — piping raw bytes");
-        upstreamConnected = true;
+        console.log("[SSE Proxy] ✓ Upstream connected — streaming");
         currentUpstream = upstreamReq;
 
-        // Tell frontend upstream is now live
         try {
           res.write(`event: upstream\ndata: ${JSON.stringify({ status: "synced" })}\n\n`);
         } catch (_) {}
@@ -139,19 +185,15 @@ router.get("/stream", protect, (req, res) => {
         });
 
         upstream.on("end", () => {
-          console.log("[SSE Proxy] Upstream ended");
-          upstreamConnected = false;
+          console.log("[SSE Proxy] Upstream ended — reconnecting in 3s");
           currentUpstream = null;
-          // Upstream closed — retry connection instead of killing browser SSE
           if (!clientDisconnected) {
-            console.log("[SSE Proxy] Upstream closed, retrying in 3s...");
             setTimeout(() => connectUpstream(1), 3000);
           }
         });
 
         upstream.on("error", (err) => {
-          console.error("[SSE Proxy] Upstream stream error:", err.message);
-          upstreamConnected = false;
+          console.error("[SSE Proxy] Upstream error:", err.message);
           currentUpstream = null;
           if (!clientDisconnected) {
             setTimeout(() => connectUpstream(1), 3000);
@@ -161,17 +203,22 @@ router.get("/stream", protect, (req, res) => {
     );
 
     upstreamReq.on("error", (err) => {
-      console.error(`[SSE Proxy] Connection error on attempt ${attempt}:`, err.message);
-      // Retry after delay — DO NOT close the browser connection
-      const delay = Math.min(2000 * attempt, 15000);
+      console.error(`[SSE Proxy] Attempt ${attempt} failed: ${err.message}`);
+      const delay = Math.min(3000 + attempt * 1000, 10000);
       setTimeout(() => connectUpstream(attempt + 1), delay);
     });
 
-    upstreamReq.setTimeout(0);
+    upstreamReq.on("timeout", () => {
+      console.warn(`[SSE Proxy] Attempt ${attempt} timed out`);
+      upstreamReq.destroy();
+      const delay = Math.min(3000 + attempt * 1000, 10000);
+      setTimeout(() => connectUpstream(attempt + 1), delay);
+    });
+
     upstreamReq.end();
   }
 
-  // Start the first upstream connection attempt
+  // Start connection process
   connectUpstream(1);
 });
 
