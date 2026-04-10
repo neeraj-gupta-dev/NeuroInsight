@@ -10,7 +10,8 @@ logger = logging.getLogger(__name__)
 
 # Connection Guard: Keeps track of unique client connections to prevent flooding
 # Render Free Tier allows limited concurrent connections.
-active_connections = set()
+from collections import defaultdict
+active_connections = defaultdict(int)
 
 @router.get("/api/eeg/stream")
 async def eeg_stream(request: Request):
@@ -19,12 +20,12 @@ async def eeg_stream(request: Request):
     Implements:
     - Manual StreamingResponse for zero-buffer transmission.
     - 15s Heartbeat loop to keep Render proxy alive.
-    - Connection Guard (1 stream per IP) to prevent 429 throttling.
+    - Connection Guard (up to 5 streams per IP) to prevent 429 throttling but allow page reloads.
     """
     client_ip = request.headers.get("X-Forwarded-For", request.client.host)
     
-    if client_ip in active_connections:
-        logger.warning(f"[ML STREAM] Connection rejected for {client_ip}: Session already active.")
+    if active_connections[client_ip] >= 5:
+        logger.warning(f"[ML STREAM] Connection rejected for {client_ip}: Concurrency limit reached ({active_connections[client_ip]} active).")
         return StreamingResponse(
             iter([f"event: fatal\ndata: {{\"error\": \"Concurrency limit reached\", \"ip\": \"{client_ip}\"}}\n\n"]),
             status_code=429,
@@ -32,8 +33,8 @@ async def eeg_stream(request: Request):
         )
 
     async def event_publisher():
-        active_connections.add(client_ip)
-        logger.info(f"[ML STREAM] Connection established for {client_ip}. Total active: {len(active_connections)}")
+        active_connections[client_ip] += 1
+        logger.info(f"[ML STREAM] Connection established for {client_ip}. Active for this IP: {active_connections[client_ip]}")
         
         # 1. Immediate heartbeat to prevent Render from closing connection during cold-start
         yield "event: heartbeat\ndata: ping\n\n"
@@ -66,9 +67,10 @@ async def eeg_stream(request: Request):
         except Exception as e:
             logger.error(f"[ML STREAM ERROR] {client_ip}: {str(e)}")
         finally:
-            if client_ip in active_connections:
-                active_connections.remove(client_ip)
-            logger.info(f"[ML STREAM] Connection closed for {client_ip}. Total active: {len(active_connections)}")
+            active_connections[client_ip] -= 1
+            if active_connections[client_ip] <= 0:
+                del active_connections[client_ip]
+            logger.info(f"[ML STREAM] Connection closed for {client_ip}. Active for this IP: {active_connections.get(client_ip, 0)}")
 
     return StreamingResponse(
         event_publisher(),
